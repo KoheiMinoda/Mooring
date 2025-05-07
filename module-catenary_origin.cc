@@ -43,46 +43,64 @@
 #include "module-catenary.h" // 自前のヘッダ
 
 class ModuleCatenary
-    // Elem クラスの仮想継承と UserDefinedElem クラスの継承
+    // Elem クラスの仮想継承と UserDefinedElem クラスの通常継承．通常継承は基底クラスの公開メンバーが派生クラスでも公開される
 	: virtual public Elem, public UserDefinedElem {
 		public:
+
+			// ----コンストラクタとデストラクタ----
+			// カテナリー要素を初期化するコンストラクタ
 			ModuleCatenary(unsigned uLabel, const DofOwner *pDO, DataManager* pDM, MBDynParser& HP);
 
+			// 仮想デストラクタ，リソースの解法を行う
 			virtual ~ModuleCatenary(void);
 
+			// ----シミュレーション関連メソッド----
+			// シミュレーション結果を出力するためのメソッド
 			virtual void Output(OutputHandler& OH) const;
+			// ヤコビアン行列のサイズを計算
 			virtual void WorkSpaceDim(integer* piNumRows, integer* piNumCols) const;
 
+			// ヤコビアン行列を組み立てるメソッド
 			VariableSubMatrixHandler& 
 			AssJac(VariableSubMatrixHandler& WorkMat,
 				doublereal dCoef, 
 				const VectorHandler& XCurr,
 				const VectorHandler& XPrimeCurr);
 
+			// 残差ベクトルを組み立てるメソッド
 			SubVectorHandler& 
 			AssRes(SubVectorHandler& WorkVec,
 				doublereal dCoef,
 				const VectorHandler& XCurr, 
 				const VectorHandler& XPrimeCurr);
 
+			// ----データアクセスメソッド----
+			// プライベートデータの数を返す
 			unsigned int iGetNumPrivData(void) const;
+			// 接続されているノードの数を返す
 			int iGetNumConnectedNodes(void) const;
+			// 接続されているノードのリストを取得
 			void GetConnectedNodes(std::vector<const Node *>& connectedNodes) const;
+			// シミュレーション値を設定
 			void SetValue(DataManager *pDM, VectorHandler& X, VectorHandler& XP,
 				SimulationEntity::Hints *ph);
-
+			// 再起動情報をストリームに出力
 			std::ostream& Restart(std::ostream& out) const;
-			virtual unsigned int iGetInitialNumDof(void) const;
-			virtual void InitialWorkSpaceDim(integer* piNumRows, integer* piNumCols) const;
 
+			// 初期化関連メソッド
+			// 初期自由度の数を返す
+			virtual unsigned int iGetInitialNumDof(void) const;
+			// 初期ヤコビアン行列のサイズを計算
+			virtual void InitialWorkSpaceDim(integer* piNumRows, integer* piNumCols) const;
+			// 初期ヤコビアン行列を組み立て
    			VariableSubMatrixHandler&
 			InitialAssJac(VariableSubMatrixHandler& WorkMat, 
 		    	const VectorHandler& XCurr);
-
+			// 初期残差ベクトルの組み立て
    			SubVectorHandler& 
 			InitialAssRes(SubVectorHandler& WorkVec, const VectorHandler& XCurr);
-
-    		void GetNode();
+			// ノード情報を取得するためのメソッド
+    			void GetNode();
 
 		private:
     		const StructNode	*g_pNode;	//pointer to strctual node
