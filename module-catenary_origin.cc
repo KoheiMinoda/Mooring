@@ -43,7 +43,7 @@
 #include "module-catenary.h" // 自前のヘッダ
 
 class ModuleCatenary
-    // Elem クラスの仮想継承と UserDefinedElem クラスの通常継承．通常継承は基底クラスの公開メンバーが派生クラスでも公開される
+    // Elem クラスの仮想継承と UserDefinedElem クラスの通常継承．仮想継承はさらに別の祖先と共有されても一つにまとまる．通常継承は基底クラスの公開メンバーが派生クラスでも公開される
 	: virtual public Elem, public UserDefinedElem {
 		public:
 
