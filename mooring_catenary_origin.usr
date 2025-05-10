@@ -1,0 +1,31 @@
+
+user defined: 50001, catenary,      
+        50001, 
+	LineLength,	# Line length
+	LineWeight,	# Line weight in water
+	Xacc,		# Tolerance
+	XAP1,		# X coord. AP1
+	YAP1,		# Y coord. AP1
+	ZAP1,		# Z coord. AP1
+        force scale factor, cosine, InitialTime, pi/ForceRampTime, 0.5, half, 0.;
+
+user defined: 50002, catenary,      
+        50002, 
+	LineLength,	# Line length
+	LineWeight,	# Line weight in water
+	Xacc,		# Tolerance
+	XAP2,		# X coord. AP2
+	YAP2,		# Y coord. AP2
+	ZAP2,		# Z coord. AP2
+        force scale factor, cosine, InitialTime, pi/ForceRampTime, 0.5, half, 0.;
+
+user defined: 50003, catenary,      
+        50003, 
+	LineLength,	# Line length
+	LineWeight,	# Line weight in water
+	Xacc,		# Tolerance
+	XAP3,		# X coord. AP3
+	YAP3,		# Y coord. AP3
+	ZAP3,		# Z coord. AP3
+        force scale factor, cosine, InitialTime, pi/ForceRampTime, 0.5, half, 0.;
+
