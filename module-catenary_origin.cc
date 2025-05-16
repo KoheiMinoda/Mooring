@@ -140,7 +140,17 @@ class ModuleCatenary
 			double rtsafe(double x1, double x2, double xacc, double d, double l, double &p0);
 	};
 
-ModuleCatenary::ModuleCatenary( unsigned uLabel, const DofOwner *pDO, DataManager* pDM, MBDynParser& HP)
+// クラス ModuleCatenary のコンストラクタをクラス定義の外側で実装している書き方
+// ModuleCatenary:: はこの関数は ModuleCatenary クラスのメンバであるという合図
+ModuleCatenary::ModuleCatenary(
+	// コンストラクタに渡される引数リスト
+	unsigned uLabel,
+	const DofOwner *pDO, 
+	DataManager* pDM, 
+	MBDynParser& HP
+)
+	// コンストラクタ本体 { … } が実行される前にmここで列挙した「基底クラスのコンストラクタ呼び出し」や「メンバ変数の初期化」が行われる
+	// Elem(uLabel, flag(0)) は ModuleCatenary が仮想継承している基底クラス Elem を呼び出すコンストラクタ, UserDefinedElem(uLabel, pDO) 通常継承しているもう一つの基底クラス UserDefinedElem のコンストラクタ
 	: Elem(uLabel, flag(0)), UserDefinedElem(uLabel, pDO), 
 		g_pNode(0), 
 		GFPx(0), GFPy(0), GFPz(0), 
