@@ -103,14 +103,14 @@ class ModuleCatenary
     			void GetNode();
 
 		private:
-    		const StructNode	*g_pNode;	//pointer to strctual node
-			double GFPx,GFPy,GFPz;			// フェアリーダーの初期x,y,z座標
-			double APx, APy, APz;			// アンカーのx,y,z座標
-			double FPx, FPy, FPz;			// フェアリーダーのx,y,z座標
+    		const StructNode	*g_pNode;	// フェアリーダーを表す MBDyn の構造ノードへのポインタ
+			double GFPx,GFPy,GFPz;			// フェアリーダーの初期グローバル x,y,z 座標
+			double APx, APy, APz;			// アンカーのグローバル x,y,z 座標
+			double FPx, FPy, FPz;			// フェアリーダーのグローバル x,y,z 座標
 			double L;						// ライン全長
 			double S;						// ライン懸垂部長さ
 			double w;						// チェーンの単重
-			double L0_APFP;					// 水平張力が0となる時のアンカー・フェアリーダー間の水平距離
+			double L0_APFP;					// 水平張力が 0 となる時のアンカー・フェアリーダー間の水平距離
 			double L_APFP;					// アンカー・フェアリーダー間の水平距離
 			double H, V;					// 張力(水平方向・鉛直方向)
 			double dFx, dFy, dFz;			// 張力(N)
@@ -121,7 +121,7 @@ class ModuleCatenary
 			double x1, x2, xacc;			// パラメータ(rtsafe関数)
 			double X;						// パラメータ(逆双曲線関数)
 
-			DriveOwner          FSF;
+			DriveOwner          FSF; // ランプアップに使う係数
 			Vec3				F;			// 張力 F(x,y,z)
 			Vec3				M;			// モーメント M(x,y,z)
 			Vec3				GFP;		// フェアリーダーの初期座標
@@ -181,6 +181,7 @@ ModuleCatenary::ModuleCatenary(
 			}
 		}
 
+		// MBDyn のパーサー HP を介して各パラメータをメンバ変数に格納する
 		g_pNode = dynamic_cast<const StructNode *>(pDM->ReadNode(HP, Node::STRUCTURAL));
 		L  =  HP.GetReal();
 		w  =  HP.GetReal();
@@ -258,39 +259,49 @@ double ModuleCatenary::myatanh(double X)
 		return 0.5 * std::log((1 + X) / (1 - X));
 	}
 
+// rtsafe 関数から呼び出され，カテナリー係留索の形状を決定するための方程式の残差とその導関数を計算する
+// rtsafe 関数はこの funcd 関数が返す残差 f が 0 になるパラメータ x を見つけ出そうとする
+// ここでの x (H/(wh)) は現時点での推定値
 void ModuleCatenary::funcd(double x, double xacc, double& f, double& df, double d, double l, double& p0)
 	{
-    	int i,max;
+    		int i,max;
 		double f1, df1;
-    	max = 1000;
-    	if(x==0.0) {
-        	f=-d;
-        	df=0e-0;
-        	p0=0e-0;
-    	}
-    	else if(x>0.0) {
-        	if(l<=0.0){
+    		max = 1000;
+
+		// 係留索が完全にたるんでいて，水平張力 0
+    		if(x==0.0) {
+        		f=-d;
+        		df=0e-0;
+        		p0=0e-0;
+    		}
+
+		// 水平張力あり
+    		else if(x>0.0) {
+
+			// 全長が垂直距離以下という物理的にあり得ない状況だが，特定の計算方法を適応する
+        		if(l<=0.0) {
 				double X_1;
 				X_1 = 1.0/x+1.0;
 
 				f=x*myacosh(X_1)-std::sqrt(1.0+2.0*x)+1.0-d;
 				df=myacosh(X_1)-1.0/std::sqrt(1.0+2.0*x)-1.0/(x*std::sqrt(std::pow(X_1, 2.0)-1.0));
-
-            	p0=0.0;
-        	} else {
-            	if(x>(l*l-1.0)/2) {
-                	p0=0.0;
-                	for(int i=1; i<max; i++) {
+            			p0=0.0;
+        		} else {
+				// 海底に接する可能性のある複雑なケース
+            			if(x>(l*l-1.0)/2) {
+                			p0=0.0;
+                			for(int i=1; i<max; i++) {
 						double func1;
 						func1 = 1.0/x+1.0/cos(p0);
 					
 						f1=x*(std::sqrt(std::pow(func1,2.0)-1.0)-std::tan(p0))-l;
 						df1=x*(func1*std::tan(p0)*(1.0/cos(p0))/std::sqrt(std::pow(func1,2.0)-1.0)-std::pow(std::tan(p0), 2.0)-1.0);
-                    	p0=p0-f1/df1;
+                    				p0=p0-f1/df1;
 						f1=x*(std::sqrt(std::pow(func1,2.0)-1.0)-std::tan(p0))-l;
 
-                    	if(fabs(f1)<xacc) { break; }
-                	}
+                    				if(fabs(f1)<xacc) { break; }
+                			}
+				
 					if(fabs(f1)>xacc) {
 						std::cout<< "fabs(f1)>eps" << std::endl;
 						throw ErrInterrupted(MBDYN_EXCEPT_ARGS);
@@ -301,22 +312,25 @@ void ModuleCatenary::funcd(double x, double xacc, double& f, double& df, double 
 
 					f=x*(myasinh(X_2)-myasinh(X_3))-l+1.0-d;
 					df=myasinh(X_2)-myasinh(X_3)-l/(x*std::sqrt(std::pow(X_2, 2.0)+1.0));
-            	
+
+				// 単純なカテナリー
 				} else {
 					double X_5;
 					X_5 = 1.0/x+1.0;
 
 					f=x*myacosh(X_5)-std::sqrt(1.0+2.0*x)+1.0-d;
 					df=myacosh(X_5)-1.0/std::sqrt(1.0+2.0*x)-1.0/(x*std::sqrt(std::pow(X_5, 2.0)-1.0));
-                	p0=0.0;
-            	}
-        	}
-    	} else {
+                			p0=0.0;
+            			}
+        		}
+    		} else {
 			std::cout << "ERROR (x<0)" << std::endl;
 			throw ErrInterrupted(MBDYN_EXCEPT_ARGS);
 		}
 	}
 
+// カテナリー曲線の形状を決定するための方程式の解 H / (wh) を求めるために利用される
+// x1 x2 : 初期区間の上限と下限 xacc : 要求される解の精度，これより小さくなれば収束判定 d l : カテナリー方程式を特徴づける無次元パラメータ &p0 : funcd 関数から返される角度パラメータ（参照渡し）
 double ModuleCatenary::rtsafe(double x1, double x2, double xacc, double d, double l, double &p0)
 	{
 		const int MAXIT=1000;
@@ -325,13 +339,18 @@ double ModuleCatenary::rtsafe(double x1, double x2, double xacc, double d, doubl
     	double dx,dxold,f,temp,rts;
 		double p1, p2;
 
+	// x1 x2 の各点で funcd を呼び出して解きたい方程式 f(x)=0 の f(x) とその導関数 df(x)/dx を計算
+	// fl=f(x1), fh=f(x2) を代入
     	ModuleCatenary::funcd(x1, xacc, fl, df, d, l, p1);
     	ModuleCatenary::funcd(x2, xacc, fh, df, d, l, p2);
 
+	// fl fh が同符号であれば根が無いため，中断する
     	if((fl>0.0&&fh>0.0)||(fl<0.0&&fh<0.0)) {
 			std::cout << "ERROR (fl>0.0&&fh>0.0)||(fl<0.0&&fh<0.0)" << std::endl;
 			throw ErrInterrupted(MBDYN_EXCEPT_ARGS);
 		}
+
+	// fl または fh が 0 であれば x1 x2 が既に根であるため，その値を返す
     	if(fl==0.0) {
 			p0  = p1;
 			rts = x1;
@@ -342,6 +361,8 @@ double ModuleCatenary::rtsafe(double x1, double x2, double xacc, double d, doubl
 			rts = x2;
 			return rts;
 		}
+
+	// f(xl)<0 かつ f(xh)>0 を満たすように根を含む区間の下限 xl と根を含む区間の上限 xh を設定
     	if(fl<0.0) {
         	xl=x1;
         	xh=x2;
@@ -350,34 +371,42 @@ double ModuleCatenary::rtsafe(double x1, double x2, double xacc, double d, doubl
         	xl=x2;
     	}
 
+	// 根の初期推定値は中点とする
     	rts=0.5*(x1+x2);
     	dxold=std::fabs(x2-x1);
     	dx=dxold;
+	// funcd により初期推定値 rts における関数の値 f と微分 df を計算する
     	ModuleCatenary::funcd(rts, xacc, f, df, d, l, p0);
 
     	for(j=0; j<MAXIT; j++) {
 
+		// ニュートン法のステップが区間の外に出るかどうか || ニュートン法のステップが二分法のステップよりも効果的かどうか
         	if((((rts-xh)*df-f)*((rts-xl)*df-f)>0.0)||((std::fabs(2.0*f))>std::fabs(dxold*df))) {
-            	dxold 	= dx;
-            	dx	  	=0.5*(xh-xl);
-            	rts		=xl+dx;
-            	if(xl==rts){ return rts; }
+			// 二分法を採用した場合
+            		dxold = dx;
+            		dx = 0.5*(xh-xl);
+            		rts =xl+dx;	
+            		if(xl==rts) { return rts; }
         	} else {
-            	dxold=dx;
-            	dx=f/df;
-            	temp=rts;
-            	rts-=dx;
-            	if(temp==rts) {return rts;}
+			// ニュートン法を採用した場合
+            		dxold=dx;
+            		dx=f/df;
+            		temp=rts;
+            		rts-=dx;
+            		if(temp==rts) {return rts;}
         	}
 
+		// 収束判定
         	if(std::fabs(dx)<xacc) { return rts; }
-        
-			ModuleCatenary::funcd(rts, xacc, f, df, d, l, p0);
-        
-			if(f<0.0){
-            	xl=rts;
+
+		// 新しい推定値 rts で funcd を呼び出し，関数値 f を更新
+		ModuleCatenary::funcd(rts, xacc, f, df, d, l, p0);
+
+		// 区間の更新
+		if(f<0.0){
+            		xl=rts;
         	} else {
-            	xh=rts;
+            		xh=rts;
         	}
     	}
 
