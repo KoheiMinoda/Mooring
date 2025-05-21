@@ -414,6 +414,9 @@ double ModuleCatenary::rtsafe(double x1, double x2, double xacc, double d, doubl
 		throw ErrInterrupted(MBDYN_EXCEPT_ARGS);
 	}
 
+// 各タイムステップで呼び出され，カテナリー係留索要素がフェアリーダーノードに及ぼす力を計算する
+// 運動方程式を解くことで次のタイムステップの状態を決定するが，AssRes 関数は外力に相当する部分を計算する
+// WorkVec : この要素が計算する力とモーメントの寄与を格納するための MBDyn のシステム全体の残差ベクトルの一部を扱うハンドラ dCoef 時間積分スキームに関連する係数？ここでは使われていない？ XCurr システム全体の現在の変位を格納するベクトル XPrimeCurr システム全体の現在の速度を格納するベクトル
 SubVectorHandler& ModuleCatenary::AssRes(SubVectorHandler& WorkVec, doublereal dCoef, const VectorHandler& XCurr, const VectorHandler& XPrimeCurr)
 	{
 		integer iNumRows = 0;					//ベクトルの大きさを決めるint変数を宣言して初期化
