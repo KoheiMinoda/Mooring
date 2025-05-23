@@ -1,0 +1,167 @@
+# MBDyn Input File Example for module-catenary_lm
+
+# ----------------------------------------------------------------------
+# Control Data Block: シミュレーション全体の制御パラメータ
+# ----------------------------------------------------------------------
+begin: data;
+    problem type: initial value; # または transient dynamic など
+    # initial value, 1e-3; # 例: 静的平衡解析を行う場合
+    # transient dynamic, 10.0, 1.0e-4, 1.0e-3; # 例: 時刻歴応答解析 (終了時刻, 最大ステップ, 初期ステップ)
+end: data;
+
+# ----------------------------------------------------------------------
+# Initial Value Block: ノードの初期条件
+# ----------------------------------------------------------------------
+begin: initial value;
+    # ModuleCatenaryLM に接続する全ノードの初期位置・速度を設定
+    # (SetInitialValue が module-catenary_lm.cc に実装されていない場合、ここで詳細に定義する必要がある)
+
+    # 例: フェアリーダーノード (ラベル 201 と仮定)
+    # node, <node_label>, position, <x>, <y>, <z>;
+    # node, <node_label>, velocity, <vx>, <vy>, <vz>;
+    # node, <node_label>, omega, <wx>, <wy>, <wz>; # 回転速度 (StructDispNodeの場合)
+
+    node, 201, position, 0.0, 10.0, -5.0;      # フェアリーダーの初期X, Y, Z座標
+    node, 201, velocity, 0.0, 0.0, 0.0;        # フェアリーダーの初期X, Y, Z方向速度
+    node, 201, omega,    0.0, 0.0, 0.0;        # フェアリーダーの初期角速度 (StructDispNodeなら必要)
+
+    # 例: 内部ノード1 (ラベル 202 と仮定) - 初期形状を考慮して設定
+    # 簡単な例として、フェアリーダーとアンカーを直線で結び、等分割した位置に配置
+    # (より現実に近い初期形状を与えることが望ましい)
+    # アンカー座標: (Ax, Ay, Az) = (0.0, 0.0, -50.0)
+    # フェアリーダー座標: (Fx, Fy, Fz) = (0.0, 10.0, -5.0)
+    # セグメント数 Seg_param = 20 (コード内で固定)
+
+    # ノードi (0-indexed, 0はフェアリーダー, Seg_param-1がアンカー直前の内部ノード) の初期位置
+    # X_i = Fx + (i / Seg_param) * (Ax - Fx) ... といった形で計算し設定
+    # 実際には module-catenary_lm.cc 内の Seg_param が 20 なので、
+    # N_nodes_param[0] (フェアリーダー) から N_nodes_param[19] (最後の内部ノード) まで
+    # の20個のノードの初期値を設定する。
+
+    # ノード 202 (内部ノード 1, N_nodes_param[1])
+    node, 202, position, 0.0, 9.5, -7.25; # (仮の値、要計算)
+    node, 202, velocity, 0.0, 0.0, 0.0;
+    node, 202, omega,    0.0, 0.0, 0.0;
+
+    # ... (ノード 203 から 219 まで同様に設定) ...
+
+    # ノード 220 (内部ノード 19, N_nodes_param[19])
+    node, 220, position, 0.0, 0.5, -47.75; # (仮の値、要計算)
+    node, 220, velocity, 0.0, 0.0, 0.0;
+    node, 220, omega,    0.0, 0.0, 0.0;
+
+end: initial value;
+
+# ----------------------------------------------------------------------
+# Solver Settings (任意、必要に応じて調整)
+# ----------------------------------------------------------------------
+begin: control data;
+    # default solver parameters;
+    # 例:
+    #BDF order: 2; # 時間積分の次数
+    #tolerance: 1.0e-5; # 収束許容誤差
+    #max iterations: 10; # 最大反復回数
+    #output: iterations;
+end: control data;
+
+# ----------------------------------------------------------------------
+# Nodes Block: モデルを構成するノードの定義
+# ----------------------------------------------------------------------
+begin: nodes;
+    # ModuleCatenaryLM で使用する全てのノードを定義
+    # (StructDispNode* を想定しているので、struct node で定義)
+
+    # フェアリーダーノード (ラベル 201)
+    struct node: 201, dynamic,
+        position, vec, # 初期値は initial value ブロックで上書きされる
+            0.0, 10.0, -5.0;
+        # orientation, eye; # 初期姿勢 (必要なら)
+        # mass, <mass_val>; # フェアリーダーノードに質量がある場合
+        # inertia, diag, <Ixx>, <Iyy>, <Izz>; # フェアリーダーノードに慣性がある場合
+
+    # 内部ノード (ラベル 202 から 220 まで、合計19個)
+    # これらはランプトマスの質量点となる
+    # 質量は ModuleCatenaryLM 内で計算され、力として作用する。
+    # ノード自体に質量を設定することも可能だが、ModuleCatenaryLM の AssRes との整合性に注意。
+    # 通常、ランプトマスモデルでは要素がノードに力を作用させる形で質量効果を表現する。
+    struct node: 202, dynamic, position, vec, 0.0, 9.5, -7.25;
+    # ... (ノード 203 から 219 まで同様に定義) ...
+    struct node: 220, dynamic, position, vec, 0.0, 0.5, -47.75;
+
+    # (オプション) アンカーポイントを表現するための固定ノード (ModuleCatenaryLMでは使わないが、可視化などのために定義する場合)
+    # struct node: 999, static, position, vec, 0.0, 0.0, -50.0; # アンカーの座標
+
+end: nodes;
+
+# ----------------------------------------------------------------------
+# Elements Block: モデルを構成する要素の定義
+# ----------------------------------------------------------------------
+begin: elements;
+    # ModuleCatenaryLM 要素の定義
+    # (要素ラベル 1 と仮定)
+    user defined: 1, catenary_lm, # 要素ラベル, 要素タイプ名 (module-catenary_lm.ccで登録した名前)
+        # --- Parameters for ModuleCatenaryLM constructor ---
+        # (module-catenary_lm.cc のコンストラクタのヘルプメッセージと読み込み順序に合わせる)
+        100.0,    # total_length (L_orig) [m]
+        50.0,     # unit_weight (w_orig) [N/m]
+        1.0e-6,   # rtsafe_accuracy (xacc_orig) - ランプトマスでは直接使用しないが、コンストラクタが読むならダミー値
+        0.0,      # APx_orig (Anchor fixed X coordinate) [m]
+        0.0,      # APy_orig (Anchor fixed Y coordinate) [m]
+        -50.0,    # APz_orig (Anchor fixed Z coordinate) [m]
+        1.0e8,    # EA (axial_stiffness) [N]
+        # --- Optional parameters (キーワードと共に指定) ---
+        CA, 1.0e4, # CA (axial_damping) [Ns/m] (オプション)
+        gravity, 9.80665, # gravity, g [m/s^2] (オプション)
+        # force scale factor, drive, my_fsf_driver, # (オプション)
+        # output, yes, # (オプション)
+        # --- Node labels ---
+        # (フェアリーダーノードラベル、内部ノードラベル1 ... Seg_param-1)
+        # (Seg_param はコード内で20に固定されているので、合計20個のノードラベルを指定)
+        201,      # Fairlead node label (N_nodes_param[0])
+        202,      # Internal node label 1 (N_nodes_param[1])
+        203,
+        204,
+        205,
+        206,
+        207,
+        208,
+        209,
+        210,
+        211,
+        212,
+        213,
+        214,
+        215,
+        216,
+        217,
+        218,
+        219,
+        220;      # Internal node label 19 (N_nodes_param[19])
+
+    # (オプション) フェアリーダーノードを動かすための要素など
+    # 例: フェアリーダーノードに prescribed motion を与える場合
+    # body: 201,
+    #    force, 0., # (もしあれば)
+    #    prescribed motion, 1, position,
+    #        component, 1, # X方向
+    #            sinusoidal, 0.0, 1.0, # mean, amplitude
+    #                0.5; # frequency [Hz]
+
+end: elements;
+
+# ----------------------------------------------------------------------
+# (オプション) Gravity Block: 重力加速度のグローバル設定
+# ----------------------------------------------------------------------
+# begin: gravity;
+#    uniform, 0.0, 0.0, -9.80665; # X, Y, Z 成分 (ModuleCatenaryLM内で個別に設定も可能)
+# end: gravity;
+
+# ----------------------------------------------------------------------
+# (オプション) Output Block: 結果出力の設定
+# ----------------------------------------------------------------------
+# begin: output;
+#    nodes; # 全ノードの変位などを出力
+#    elements; # 全要素の出力を有効にする (ModuleCatenaryLMのOutputメソッドが呼ばれる)
+#    format, gnuplot;
+#    frequency, 100; # 出力頻度 (ステップ毎など)
+# end: output;
