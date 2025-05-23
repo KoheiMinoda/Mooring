@@ -474,36 +474,48 @@ double ModuleCatenaryLM::rtsafe_catenary_local(double x1_bounds, double x2_bound
     throw ErrInterrupted(MBDYN_EXCEPT_ARGS);
 }
 
-
-void ModuleCatenaryLM::SetInitialValue(VectorHandler&, VectorHandler&) {
-
+// 要素に関連する自由度の初期値を設定するために MBDyn から呼び出す
+// N_nodes_params に格納されているノードの初期位置や初期速度を計算
+void ModuleCatenaryLM::SetInitialValue(VectorHandler& /* X */, VectorHandler& /* XP */) {
+    // フェアリーダー点座標とアンカー点座標からラインの初期形状を計算し，各内部ノードの初期座標を決定する，かも？
 }
 
 
 // Outputメソッド: シミュレーション結果の出力
 void ModuleCatenaryLM::Output(OutputHandler& OH) const {
+    // この要素が出力対象かどうかの判定
     if (bToBeOutput()) {
+        // テキスト形式で出力するかどうかの判定
         if (OH.UseText(OutputHandler::LOADABLE)) {
+            // フェアリーダーノードが存在し，有効かどうかの確認
             if (!N_nodes_param.empty() && N_nodes_param[0] != 0) {
-                OH.Loadable() << GetLabel() 
+                OH.Loadable() << GetLabel() // 要素のラベル
                               << " FairleadPos "
-                              << N_nodes_param[0]->GetXCurr().dGet(1) << " "
-                              << N_nodes_param[0]->GetXCurr().dGet(2) << " "
-                              << N_nodes_param[0]->GetXCurr().dGet(3)
-                              << std::endl;
+                              << N_nodes_param[0]->GetXCurr().dGet(1) << " " // フェアリーダーの X 座標
+                              << N_nodes_param[0]->GetXCurr().dGet(2) << " " // フェアリーダーの Y 座標
+                              << N_nodes_param[0]->GetXCurr().dGet(3) // // フェアリーダーの Z 座標
+                              << std::endl; 
             } else {
                 OH.Loadable() << GetLabel() << " Error: Fairlead node not available for output." << std::endl;
             }
+            // ========== 各セグメントの張力や内部ノードの位置なども出力するならここに ============
         }
     }
 }
 
-// WorkSpaceDimメソッド: ヤコビアン行列と残差ベクトルの次元を設定
+// ================ ヤコビアン行列と残差ベクトルの次元を設定 ====================
+// origin ではフェアリーダーポイントのみで 6 自由度で扱っていたが，ランプドマス法で内部ノードも全て管理する場合は大きく変わる
 void ModuleCatenaryLM::WorkSpaceDim(integer* piNumRows, integer* piNumCols) const {
     *piNumRows = 0;
     *piNumCols = 0;
 }
 
+void ModuleCatenaryLM::InitialWorkSpaceDim(integer* piNumRows, integer* piNumCols) const {
+    *piNumRows = 0;
+    *piNumCols = 0;
+}
+
+// ============== 全体ヤコビアン ====================
 VariableSubMatrixHandler& ModuleCatenaryLM::AssJac(
     VariableSubMatrixHandler& WorkMat,
     doublereal /*dCoef*/,
@@ -522,6 +534,7 @@ VariableSubMatrixHandler& ModuleCatenaryLM::InitialAssJac(
     return WorkMat;
 }
 
+// ================ 残差 ==========================
 SubVectorHandler& ModuleCatenaryLM::AssRes(
     SubVectorHandler& WorkVec,
     doublereal dCoef,
@@ -531,33 +544,6 @@ SubVectorHandler& ModuleCatenaryLM::AssRes(
     return WorkVec;
 }
 
-unsigned int ModuleCatenaryLM::iGetNumConnectedNodes(void) const {
-    return Seg_param;
-}
-
-std::ostream& ModuleCatenaryLM::Restart(std::ostream& out) const {
-    out << "# ModuleCatenaryLM (Label: " << GetLabel() << ") Restart: Not implemented yet." << std::endl;
-    return out;
-}
-
-unsigned int ModuleCatenaryLM::iGetInitialNumDof(void) const {
-    return 0;
-}
-
-
-void ModuleCatenaryLM::InitialWorkSpaceDim(integer* piNumRows, integer* piNumCols) const {
-    *piNumRows = 0;
-    *piNumCols = 0;
-}
-
-void ModuleCatenaryLM::SetValue(DataManager* /*pDM*/,
-                                VectorHandler& /*X*/,
-                                VectorHandler& /*XP*/,
-                                SimulationEntity::Hints* /*pHints*/)
-{
-    // 重力荷重は AssRes 内で扱うか，要素外で扱うのでここは空実装
-}
-
 SubVectorHandler& ModuleCatenaryLM::InitialAssRes(
     SubVectorHandler& WorkVec,
     const VectorHandler& XCurr
@@ -565,6 +551,37 @@ SubVectorHandler& ModuleCatenaryLM::InitialAssRes(
     return WorkVec;
 }
 
+// この要素がMBDynのモデル内で接続している，あるいは管理しているノードの数を返す
+// MBDyn は要素とノード間の接続情報を構築・管理するためにこの情報を利用する
+unsigned int ModuleCatenaryLM::iGetNumConnectedNodes(void) const {
+    return Seg_param; // これで完成のはず
+}
+
+// 後回し
+std::ostream& ModuleCatenaryLM::Restart(std::ostream& out) const {
+    out << "# ModuleCatenaryLM (Label: " << GetLabel() << ") Restart: Not implemented yet." << std::endl;
+    return out;
+}
+
+// 初期化フェーズで特別な解析をするなら，初期のみ自由度を付与する
+unsigned int ModuleCatenaryLM::iGetInitialNumDof(void) const {
+    return 0;
+}
+
+
+void ModuleCatenaryLM::SetValue(
+    DataManager* /*pDM*/,
+    VectorHandler& /*X*/,
+    VectorHandler& /*XP*/,
+    SimulationEntity::Hints* /*pHints*/ // 線形化が必要かどうか
+)
+{
+    // 重力荷重は AssRes 内で扱うか，要素外で扱うのでここは空実装
+}
+
+// ==== ModuleCatenaryLM 要素が管理している i 番目のノードへのポインタを返すためのインターフェース ====
+// MBDyn のソルバーや他のモジュールが，この要素に関連付けられたノードの情報（位置・速度・力など）にアクセスしたり，ノードの状態を変更したりするために使用する
+// const 版：この関数自身が const であり，この関数を呼び出しても ModuleCatenaryLM オブジェクトの状態は変更されない
 const Node* ModuleCatenaryLM::pGetNode(unsigned int i) const {
     if (i < N_nodes_param.size() && N_nodes_param[i] != 0) {
         return N_nodes_param[i];
@@ -572,6 +589,7 @@ const Node* ModuleCatenaryLM::pGetNode(unsigned int i) const {
     return 0;
 }
 
+// 非 const 版：ノードの状態を変更することが可能
 Node* ModuleCatenaryLM::pGetNode(unsigned int i) {
     if (i < N_nodes_param.size() && N_nodes_param[i] != 0) {
         return N_nodes_param[i];
