@@ -164,6 +164,7 @@ ModuleCatenaryLM::ModuleCatenaryLM(
         }
 
         // ===== パラメータ読み込み開始 =====
+        // ここでの読み込みは .mbd ファイルの elements block を上から読み込む（.usr ファイルに外だししているかも）
 
         // 全長 L_orig
         L_orig = HP.GetReal();
@@ -171,24 +172,25 @@ ModuleCatenaryLM::ModuleCatenaryLM(
             throw ErrGeneric(MBDYN_EXCEPT_ARGS);
         }
 
-        // 3. 単位重量 w_orig
+        // 単位重量 w_orig
         w_orig = HP.GetReal();
         if (w_orig <= 0.0) {
             throw ErrGeneric(MBDYN_EXCEPT_ARGS);
         }
 
-        // 4. rtsafeの計算精度 xacc_orig
+        // rtsafeの計算精度 xacc_orig
         xacc_orig = HP.GetReal();
         if (xacc_orig <= 0.0) {
             throw ErrGeneric(MBDYN_EXCEPT_ARGS);
         }
 
-        // 5. アンカー固定座標 APx_orig, APy_orig, APz_orig
+        // アンカー固定座標 APx_orig, APy_orig, APz_orig
         APx_orig = HP.GetReal();
         APy_orig = HP.GetReal();
         APz_orig = HP.GetReal();
 
-        // 6. 軸剛性 EA (ランプドマス法用)
+        // ====== EA, CA, g : 既存の .usr ファイルに加える項目？==========
+        // 軸剛性 EA (ランプドマス法用)
         doublereal EA_val;
         if (HP.IsKeyWord("EA")) { // キーワードがある方がより頑健
             EA_val = HP.GetReal();
@@ -199,7 +201,7 @@ ModuleCatenaryLM::ModuleCatenaryLM(
             throw ErrGeneric(MBDYN_EXCEPT_ARGS);
         }
 
-        // 7. 軸方向減衰係数 CA (オプション)
+        // 軸方向減衰係数 CA (オプション)
         doublereal CA_val = 0.0; // デフォルトは減衰なし
         if (HP.IsKeyWord("CA")) {
             CA_val = HP.GetReal();
@@ -208,36 +210,34 @@ ModuleCatenaryLM::ModuleCatenaryLM(
             }
         }
 
-        // 8. 重力加速度 g (オプション)
+        // 重力加速度 g (オプション)
         if (HP.IsKeyWord("gravity")) {
             g_gravity_param = HP.GetReal();
-            if (g_gravity_param < 0.0) { // 通常は正の値
-                // throw ErrGeneric(MBDYN_EXCEPT_ARGS); // エラーにするか、警告にとどめるか
+            if (g_gravity_param < 0.0) { // 正の値
             }
         }
 
-        // 9. FSFの読み込み (元のコードから流用)
-        // 元のコードでは "Force" "scale" "factor" とスペース区切りでキーワードを認識しようとしている。
-        if (HP.IsKeyWord("force_scale_factor")) { // より一般的なキーワード形式
-            FSF_orig.Set(HP.GetDriveCaller());
-        } else if (HP.IsKeyWord("Force") && HP.IsKeyWord("scale") && HP.IsKeyWord("factor")) { // 元の形式を試みる
-            FSF_orig.Set(HP.GetDriveCaller());
-        } else {
-            FSF_orig.Set(new OneDriveCaller); // デフォルトはスケール1.0
-        }
+        // FSF の読み込み（元のコードを維持）
+        if (HP.IsKeyWord("Force" "scale" "factor")) {
+			FSF.Set(HP.GetDriveCaller());
+		} else {
+			FSF.Set(new OneDriveCaller);
+		}
 
-        // 10. 出力フラグの設定 (元のコードから流用)
+        // 出力フラグの設定（元のコードを維持）
         SetOutputFlag(pDM->fReadOutput(HP, Elem::LOADABLE));
 
-        // --- ノードの確保と初期化 ---
+        // ノードの確保と初期化
         // N_nodes_param にはフェアリーダーと Seg_param-1 個の内部ノードを格納
         // 合計 Seg_param 個の StructNode* を持つ
         N_nodes_param.clear();
         N_nodes_param.resize(Seg_param);
 
-        // 2) HP からフェアリーダーノードのラベルを読み取り
+        // ====== ここも既存の .usr ファイルに書き足す (201~220 などユニークな数字を 20 コ) ======
         unsigned int fairlead_node_label = HP.GetInt();
 
+        // 各ノードのラベルの受け取り
+        // フェアリーダーノードの処理
         {
             Node* rawNode = pDM->pFindNode(Node::STRUCTURAL, fairlead_node_label);
             if (rawNode == nullptr) {
@@ -250,7 +250,7 @@ ModuleCatenaryLM::ModuleCatenaryLM(
             N_nodes_param[0] = dispNode;
         }
 
-        // 内部質量点ノード (1 … Seg_param-1) もすべて入力ファイルでラベルを受け取り
+        // 内部質量点ノードの処理（1 … Seg_param-1）もすべて入力ファイルでラベルを受け取り
         for (unsigned int i = 1; i < Seg_param; ++i) {
             unsigned int node_label = HP.GetInt();
 
@@ -269,9 +269,10 @@ ModuleCatenaryLM::ModuleCatenaryLM(
         Vec3 zeroVel(0.0, 0.0, 0.0);
 
         P_param.resize(Seg_param); // Seg_param 個のセグメント
-        doublereal L0_s = L_orig / static_cast<doublereal>(Seg_param); // 各セグメントの自然長
-        doublereal mass_per_segment = (w_orig / g_gravity_param) * L0_s; // 各セグメントの質量
+        doublereal L0_s = L_orig / static_cast<doublereal>(Seg_param); // 各セグメントの自然長：単純に全長をセグメント数で割っている
+        doublereal mass_per_segment = (w_orig / g_gravity_param) * L0_s; // 各セグメントの質量：各セグメントの「質量」
 
+        // P_param ベクトルの各要素にそれぞれを格納
         for (unsigned int i = 0; i < Seg_param; ++i) {
             P_param[i].L0_seg = L0_s;
             P_param[i].M_seg = mass_per_segment;
@@ -279,7 +280,7 @@ ModuleCatenaryLM::ModuleCatenaryLM(
             P_param[i].CA_seg = CA_val;
         }
 
-        // ログ出力
+        // ログ出力：
         pDM->GetLogFile() << "ModuleCatenaryLM (" << GetLabel() << ") initialized:" << std::endl;
         pDM->GetLogFile() << "  Fairlead Node Label: " << fairlead_node_label << std::endl;
         pDM->GetLogFile() << "  Anchor Fixed At: (" << APx_orig << ", " << APy_orig << ", " << APz_orig << ")" << std::endl;
@@ -295,23 +296,29 @@ double ModuleCatenaryLM::myasinh_local(double val) { return std::log(val + std::
 double ModuleCatenaryLM::myacosh_local(double val) { return std::log(val + std::sqrt(val + 1.) * std::sqrt(val - 1.));}
 double ModuleCatenaryLM::myatanh_local(double val) { return 0.5 * std::log((1. + val) / (1. - val)); }
 
+// rtsafe_catenary_local 関数関数から呼び出される：f(x) とその導関数を求める
 void ModuleCatenaryLM::funcd_catenary_local(double x_param, double xacc, double &f_val, double &df_val, double d_geom, double l_geom, double &p0_angle) {
-    int i_internal_iter,max_internal_iter;
+    int i_internal_iter, max_internal_iter;
     double f1_internal, df1_internal;
     max_internal_iter = 1000;
 
-    if(x_param==0.0) {
-        f_val=-d_geom;
-        df_val=0.0;
-        p0_angle=0.0;
-    } else if(x_param>0.0) {
-        if(l_geom<=0.0){
+    // 水平張力が無い状態
+    if(x_param == 0.0) {
+        f_val = -d_geom;
+        df_val = 0.0;
+        p0_angle = 0.0;
+
+    // 水平張力がある状態
+    } else if(x_param > 0.0) {
+        
+        // 特殊なケース：元のコードをそのままにしつつ，保護をすこししただけ
+        if(l_geom <= 0.0){
             double X_1_internal;
             X_1_internal = 1.0/x_param+1.0;
             if (X_1_internal < 1.0) X_1_internal = 1.0; // acoshの引数保護
-            double term_sqrt1 = 1.0+2.0*x_param;
+                double term_sqrt1 = 1.0+2.0*x_param;
             if (term_sqrt1 < 0.0) term_sqrt1 = 0.0;
-            double term_sqrt2 = X_1_internal*X_1_internal-1.0;
+                double term_sqrt2 = X_1_internal*X_1_internal-1.0;
             if (term_sqrt2 < 0.0) term_sqrt2 = 0.0;
 
             f_val=x_param*myacosh_local(X_1_internal)-std::sqrt(term_sqrt1)+1.0-d_geom;
@@ -321,46 +328,52 @@ void ModuleCatenaryLM::funcd_catenary_local(double x_param, double xacc, double 
                 df_val=myacosh_local(X_1_internal)-1.0/std::sqrt(term_sqrt1)-1.0/(x_param*std::sqrt(term_sqrt2));
             }
             p0_angle=0.0;
+
+        // 一般的なケース
         } else {
-            if(x_param>(l_geom*l_geom-1.0)/2.0) {
+
+            // 海底との接触がある可能性がある場合：元のコードをそのままにしつつ，保護をすこししただけ
+            if(x_param > (l_geom*l_geom - 1.0) / 2.0) {
                 p0_angle=0.0;
-                for(i_internal_iter=0; i_internal_iter<max_internal_iter; i_internal_iter++) {
+                for(i_internal_iter = 0; i_internal_iter < max_internal_iter; i_internal_iter++) {
                     double cos_p0 = std::cos(p0_angle);
                     if (std::fabs(cos_p0) < 1e-9) { df1_internal = 1.0; break; } // 保護
-                    double func1_internal = 1.0/x_param+1.0/cos_p0;
-                    double term_in_sqrt_f1 = func1_internal*func1_internal-1.0;
+                    double func1_internal = 1.0/x_param + 1.0/cos_p0;
+                    double term_in_sqrt_f1 = func1_internal*func1_internal - 1.0;
                     if (term_in_sqrt_f1 < 0.0) term_in_sqrt_f1 = 0.0;
 
-                    f1_internal=x_param*(std::sqrt(term_in_sqrt_f1)-std::tan(p0_angle))-l_geom;
+                    f1_internal = x_param*(std::sqrt(term_in_sqrt_f1) - std::tan(p0_angle)) - l_geom;
 
                     if (std::fabs(cos_p0) < 1e-9 || term_in_sqrt_f1 < 1e-12 ) { df1_internal = 1.0; break; } // 保護
                     df1_internal = x_param * (func1_internal * std::tan(p0_angle) / (cos_p0 * std::sqrt(term_in_sqrt_f1)) - (std::tan(p0_angle)*std::tan(p0_angle)) - 1.0);
 
                     if (std::fabs(df1_internal) < 1e-9) { break; }
-                    p0_angle=p0_angle-f1_internal/df1_internal;
+                    p0_angle = p0_angle-f1_internal/df1_internal;
 
                     cos_p0 = std::cos(p0_angle);
                     if (std::fabs(cos_p0) < 1e-9) { break; }
-                    func1_internal = 1.0/x_param+1.0/cos_p0;
-                    term_in_sqrt_f1 = func1_internal*func1_internal-1.0;
+                    func1_internal = 1.0/x_param + 1.0/cos_p0;
+                    term_in_sqrt_f1 = func1_internal*func1_internal - 1.0;
                     if (term_in_sqrt_f1 < 0.0) term_in_sqrt_f1 = 0.0;
-                    f1_internal=x_param*(std::sqrt(term_in_sqrt_f1)-std::tan(p0_angle))-l_geom;
+                    f1_internal = x_param*(std::sqrt(term_in_sqrt_f1) - std::tan(p0_angle)) - l_geom;
 
-                    if(std::fabs(f1_internal)<xacc) { break; }
+                    if(std::fabs(f1_internal) < xacc) { break; }
                 }
-                if(i_internal_iter==max_internal_iter && std::fabs(f1_internal)>xacc) {
+                if(i_internal_iter == max_internal_iter && std::fabs(f1_internal) > xacc) {
                 }
 
-                double X_2_internal = l_geom/x_param+std::tan(p0_angle);
+                double X_2_internal = l_geom/x_param + std::tan(p0_angle);
                 double X_3_internal = std::tan(p0_angle);
-                f_val=x_param*(myasinh_local(X_2_internal)-myasinh_local(X_3_internal))-l_geom+1.0-d_geom;
+                f_val = x_param*(myasinh_local(X_2_internal) - myasinh_local(X_3_internal)) - l_geom + 1.0 - d_geom;
                 
-                double term_in_sqrt_df = X_2_internal*X_2_internal+1.0;
+                double term_in_sqrt_df = X_2_internal*X_2_internal + 1.0;
                 // if (term_in_sqrt_df < 0.0) term_in_sqrt_df = 0.0; // asinhの引数は実数なので常に正
                 if (std::fabs(x_param * std::sqrt(term_in_sqrt_df)) < 1e-12 ) { df_val = 1.0; } // 保護
                 else {
-                    df_val=myasinh_local(X_2_internal)-myasinh_local(X_3_internal)-l_geom/(x_param*std::sqrt(term_in_sqrt_df));
+                    df_val=myasinh_local(X_2_internal) - myasinh_local(X_3_internal) - l_geom/(x_param*std::sqrt(term_in_sqrt_df));
                 }
+
+            // 海底との接触がある可能性が無い場合：単純なカテナリー
             } else {
                 double X_5_internal = 1.0/x_param+1.0;
                 if (X_5_internal < 1.0) X_5_internal = 1.0; // acoshの引数保護
@@ -369,13 +382,13 @@ void ModuleCatenaryLM::funcd_catenary_local(double x_param, double xacc, double 
                 double term_sqrt2 = X_5_internal*X_5_internal-1.0;
                 if (term_sqrt2 < 0.0) term_sqrt2 = 0.0;
 
-                f_val=x_param*myacosh_local(X_5_internal)-std::sqrt(term_sqrt1)+1.0-d_geom;
+                f_val = x_param*myacosh_local(X_5_internal) - std::sqrt(term_sqrt1) + 1.0 - d_geom;
                 if (std::fabs(x_param * std::sqrt(term_sqrt2)) < 1e-12 || std::fabs(std::sqrt(term_sqrt1)) < 1e-12) { // 保護
                      df_val = myacosh_local(X_5_internal); // 近似
                 } else {
-                     df_val=myacosh_local(X_5_internal)-1.0/std::sqrt(term_sqrt1)-1.0/(x_param*std::sqrt(term_sqrt2));
+                     df_val = myacosh_local(X_5_internal) - 1.0/std::sqrt(term_sqrt1) - 1.0/(x_param*std::sqrt(term_sqrt2));
                 }
-                p0_angle=0.0;
+                p0_angle = 0.0;
             }
         }
     } else {
@@ -383,71 +396,78 @@ void ModuleCatenaryLM::funcd_catenary_local(double x_param, double xacc, double 
     }
 }
 
+// x1_bounds, x2_bounds は根が含まれると期待される初期区間の下限と上限
 double ModuleCatenaryLM::rtsafe_catenary_local(double x1_bounds, double x2_bounds, double xacc_tol, double d_geom, double l_geom, double &p0_angle_out) {
-    const int MAXIT_internal=1000;
+    const int MAXIT_internal = 1000;
     int j_internal;
     double fh_internal,fl_internal,xh_internal,xl_internal;
     double dx_internal,dxold_internal,f_internal,temp_internal,rts_internal;
     double p1_internal, p2_internal;
     double df_not_used, df_internal; // funcd_catenary_local がdfを要求するため
 
+    // x1_bounds, x2_bounds における f(x) とその導関数
     funcd_catenary_local(x1_bounds, xacc_tol, fl_internal, df_not_used, d_geom, l_geom, p1_internal);
     funcd_catenary_local(x2_bounds, xacc_tol, fh_internal, df_not_used, d_geom, l_geom, p2_internal);
 
-    if((fl_internal>0.0 && fh_internal>0.0) || (fl_internal<0.0 && fh_internal<0.0)) {
+    // 二つの関数値が同符号ならエラー
+    if((fl_internal > 0.0 && fh_internal > 0.0) || (fl_internal < 0.0 && fh_internal < 0.0)) {
         throw ErrInterrupted(MBDYN_EXCEPT_ARGS);
     }
-    if(fl_internal==0.0) {
-        p0_angle_out  = p1_internal;
+    // どちらかの関数値が 0 であればそれが答え
+    if(fl_internal == 0.0) {
+        p0_angle_out = p1_internal;
         return x1_bounds;
     }
-    if(fh_internal==0.0) {
-        p0_angle_out  = p2_internal;
+    if(fh_internal == 0.0) {
+        p0_angle_out = p2_internal;
         return x2_bounds;
     }
 
-    if(fl_internal<0.0) {
-        xl_internal=x1_bounds;
-        xh_internal=x2_bounds;
+    // fl_internal < 0 となるように xl_internal と xh_internal を設定する
+    if(fl_internal < 0.0) {
+        xl_internal = x1_bounds;
+        xh_internal = x2_bounds;
     } else {
-        xh_internal=x1_bounds;
-        xl_internal=x2_bounds;
+        xh_internal = x1_bounds;
+        xl_internal = x2_bounds;
     }
 
-    rts_internal=0.5*(x1_bounds+x2_bounds);
-    dxold_internal=std::fabs(x2_bounds-x1_bounds);
-    dx_internal=dxold_internal;
+    // 中点を初期の推定値とし，反復処理のセット
+    rts_internal = 0.5*(x1_bounds + x2_bounds);
+    dxold_internal = std::fabs(x2_bounds - x1_bounds);
+    dx_internal = dxold_internal;
     funcd_catenary_local(rts_internal, xacc_tol, f_internal, df_internal, d_geom, l_geom, p0_angle_out);
 
-    for(j_internal=0; j_internal<MAXIT_internal; j_internal++) {
-        if((((rts_internal-xh_internal)*df_internal-f_internal)*((rts_internal-xl_internal)*df_internal-f_internal)>0.0)
+
+    for(j_internal = 0; j_internal < MAXIT_internal; j_internal++) {
+        if((((rts_internal - xh_internal)*df_internal - f_internal)*((rts_internal - xl_internal)*df_internal - f_internal) > 0.0)
            || (std::fabs(2.0*f_internal) > std::fabs(dxold_internal*df_internal))) {
-            dxold_internal  = dx_internal;
-            dx_internal     =0.5*(xh_internal-xl_internal);
-            rts_internal    =xl_internal+dx_internal;
-            if(xl_internal==rts_internal){ return rts_internal; }
+            dxold_internal = dx_internal;
+            dx_internal = 0.5*(xh_internal - xl_internal);
+            rts_internal = xl_internal + dx_internal;
+            if(xl_internal == rts_internal) { return rts_internal; }
         } else {
-            dxold_internal=dx_internal;
+            dxold_internal = dx_internal;
             if (std::fabs(df_internal) < 1e-12) { // ゼロ除算を避ける
-                dx_internal     =0.5*(xh_internal-xl_internal); // 二分法にフォールバック
-                rts_internal    =xl_internal+dx_internal;
-                if(xl_internal==rts_internal){ return rts_internal; }
+                dx_internal = 0.5*(xh_internal - xl_internal); // 二分法にフォールバック
+                rts_internal = xl_internal + dx_internal;
+                if(xl_internal == rts_internal){ return rts_internal; }
             } else {
-                dx_internal=f_internal/df_internal;
+                dx_internal = f_internal/df_internal;
             }
-            temp_internal=rts_internal;
-            rts_internal-=dx_internal;
-            if(temp_internal==rts_internal) {return rts_internal;}
+            temp_internal = rts_internal;
+            rts_internal -= dx_internal;
+            if(temp_internal == rts_internal) {return rts_internal;}
         }
 
-        if(std::fabs(dx_internal)<xacc_tol) { return rts_internal; }
+        if(std::fabs(dx_internal) < xacc_tol) { return rts_internal; }
 
         funcd_catenary_local(rts_internal, xacc_tol, f_internal, df_internal, d_geom, l_geom, p0_angle_out);
 
-        if(f_internal<0.0){
-            xl_internal=rts_internal;
+        if(f_internal < 0.0){
+            xl_internal = rts_internal;
         } else {
-            xh_internal=rts_internal;
+            xh_internal = rts_internal;
         }
     }
 
@@ -462,11 +482,10 @@ void ModuleCatenaryLM::SetInitialValue(VectorHandler&, VectorHandler&) {
 
 // Outputメソッド: シミュレーション結果の出力
 void ModuleCatenaryLM::Output(OutputHandler& OH) const {
-    if (bToBeOutput()) { // MBDynの標準的な出力判定
+    if (bToBeOutput()) {
         if (OH.UseText(OutputHandler::LOADABLE)) {
-            // 簡単な例として、要素ラベルとフェアリーダーノードの現在の座標を出力
             if (!N_nodes_param.empty() && N_nodes_param[0] != 0) {
-                OH.Loadable() << GetLabel() // 要素のラベル
+                OH.Loadable() << GetLabel() 
                               << " FairleadPos "
                               << N_nodes_param[0]->GetXCurr().dGet(1) << " "
                               << N_nodes_param[0]->GetXCurr().dGet(2) << " "
@@ -475,9 +494,7 @@ void ModuleCatenaryLM::Output(OutputHandler& OH) const {
             } else {
                 OH.Loadable() << GetLabel() << " Error: Fairlead node not available for output." << std::endl;
             }
-            // 将来的には、各セグメントの張力や内部ノードの位置なども出力対象になります。
         }
-        // 他の出力形式 (バイナリなど) のサポートもここに追加できます。
     }
 }
 
@@ -505,7 +522,6 @@ VariableSubMatrixHandler& ModuleCatenaryLM::InitialAssJac(
     return WorkMat;
 }
 
-// AssResメソッド: 残差ベクトルの計算 (スタブ)
 SubVectorHandler& ModuleCatenaryLM::AssRes(
     SubVectorHandler& WorkVec,
     doublereal dCoef,
@@ -515,32 +531,21 @@ SubVectorHandler& ModuleCatenaryLM::AssRes(
     return WorkVec;
 }
 
-// iGetNumConnectedNodesメソッド: 接続されているノード数を返す
 unsigned int ModuleCatenaryLM::iGetNumConnectedNodes(void) const {
-    // N_nodes_param にはフェアリーダーと Seg_param-1 個の内部ノードが格納されている。
-    // 合計 Seg_param 個のノードをこの要素が「接続」しているとMBDynに伝える。
-    // これらは AddNode() で登録されたノード。
     return Seg_param;
 }
 
-// Restartメソッド: リスタート情報の出力 (スタブ)
 std::ostream& ModuleCatenaryLM::Restart(std::ostream& out) const {
     out << "# ModuleCatenaryLM (Label: " << GetLabel() << ") Restart: Not implemented yet." << std::endl;
-    // 将来的には、必要な内部状態（もしあれば）をここに出力します。
-    // 通常、ノードの状態はMBDynが保存し、要素のパラメータは入力ファイルから再読み込みされます。
     return out;
 }
 
-// iGetInitialNumDofメソッド: 初期化時に使われる自由度数 (スタブ)
 unsigned int ModuleCatenaryLM::iGetInitialNumDof(void) const {
-    // SetInitialValue を使う場合、これが0でもMBDynが呼び出すことがあります。
-    // 要素が独自の初期化自由度を持たない場合は0。
     return 0;
 }
 
-// InitialWorkSpaceDimメソッド: 初期化時のワークスペース次元 (スタブ)
+
 void ModuleCatenaryLM::InitialWorkSpaceDim(integer* piNumRows, integer* piNumCols) const {
-    // iGetInitialNumDof() が0なら、通常これも0。
     *piNumRows = 0;
     *piNumCols = 0;
 }
@@ -550,50 +555,35 @@ void ModuleCatenaryLM::SetValue(DataManager* /*pDM*/,
                                 VectorHandler& /*XP*/,
                                 SimulationEntity::Hints* /*pHints*/)
 {
-    // 重力荷重は AssRes 内で扱うか、要素外で扱うのでここは空実装
+    // 重力荷重は AssRes 内で扱うか，要素外で扱うのでここは空実装
 }
 
-// InitialAssResメソッド: 初期化時の残差 (スタブ)
 SubVectorHandler& ModuleCatenaryLM::InitialAssRes(
     SubVectorHandler& WorkVec,
     const VectorHandler& XCurr
 ) {
-    // InitialWorkSpaceDim が 0,0 なら、呼ばれないか、何もしない。
-    // if (WorkVec.iGetSize() > 0) { // サイズが設定されていればリセット
-    //     WorkVec.ResizeReset(0);
-    // }
-    // ASSERT(0); // 元のコードにあったように、呼ばれるべきではない場合
     return WorkVec;
 }
 
-// pGetNodeメソッド (const版): 指定されたインデックスのノードへのポインタを返す
 const Node* ModuleCatenaryLM::pGetNode(unsigned int i) const {
     if (i < N_nodes_param.size() && N_nodes_param[i] != 0) {
         return N_nodes_param[i];
     }
-    return 0; // または適切なエラー処理
+    return 0;
 }
 
-// pGetNodeメソッド (非const版): 指定されたインデックスのノードへのポインタを返す
 Node* ModuleCatenaryLM::pGetNode(unsigned int i) {
     if (i < N_nodes_param.size() && N_nodes_param[i] != 0) {
         return N_nodes_param[i];
     }
-    return 0; // または適切なエラー処理
+    return 0;
 }
 
-
-// ---- モジュール登録関数の実装 (ファイル末尾に配置) ----
-// (bool catenary_lm_set(void) と extern "C" int module_init(...) は前回提示した通り)
 bool catenary_lm_set(void) {
 #ifdef DEBUG
-    // MBDynのデバッグ出力マクロがあればそれを使う方が良い
     std::cerr << __FILE__ << ":" << __LINE__ << ": bool catenary_lm_set(void)" << std::endl;
 #endif
     UserDefinedElemRead *rf = new UDERead<ModuleCatenaryLM>; // 新しいクラス名でテンプレート特殊化
-
-    // MBDynに登録する要素名を新しい名前に変更 (例: "catenary_lm")
-    // 元のSetUDEはdataman.hで定義されているか、MBDynのグローバル関数のはず
     if (!SetUDE("catenary_lm", rf)) {
         delete rf;
         return false;
@@ -601,7 +591,7 @@ bool catenary_lm_set(void) {
     return true;
 }
 
-#ifndef STATIC_MODULES // MBDynの標準的な動的モジュールロードの仕組み
+#ifndef STATIC_MODULES // MBDyn の標準的な動的モジュールロードの仕組み
 extern "C" {
     int module_init(const char *module_name, void *pdm /*DataManager* */, void *php /* MBDynParser* */) {
         if (!catenary_lm_set()) { // 新しいセット関数を呼ぶ
