@@ -126,6 +126,11 @@ private:
     std::vector<SegmentProperty> P_param; // サイズは Seg_param (セグメント数)
 
     doublereal g_gravity_param;
+
+    // 海底反力の考慮
+    doublereal seabed_z_param; // 海底面 Z 座標（上向きが正）
+    doublereal Kseabed_param; // 海底ばね [N/m]
+    doublereal Cseabed_param; // 海底ダンパ [N s / m]
 };
 
 // コンストラクタ：パラメータの読み込みと初期設定
@@ -217,6 +222,16 @@ ModuleCatenaryLM::ModuleCatenaryLM(
             g_gravity_param = HP.GetReal();
             if (g_gravity_param < 0.0) { // 正の値
             }
+        }
+
+        // 海底パラメータ
+        seabed_z_param = APz_orig;
+        Kseabed_param = 1.e7;
+        Cseabed_param = 1.e4;
+        if (HP.IsKeyWord("seabed")) {
+            if (HP.IsKeyWord("z")) seabed_z_param = HP.GetReal(); // z 座標
+            if (HP.IsKeyWord("k")) Kseabed_param = HP.GetReal(); // 剛性 k
+            if (HP.IsKeyWord("c")) Cseabed_param = HP.GetReal(); // 減衰 c
         }
 
         // FSF の読み込み（元のコードを維持）
@@ -671,6 +686,17 @@ SubVectorHandler& ModuleCatenaryLM::AssRes(
         const Vec3 Fi = - a_like * dCoef * node_mass_param[i];
 
         R.Add(idx+1, Fi);
+
+        // 海底接触があるならノード単位で反力を追加（押し返す）
+        const doublereal z_i = N_nodes_param[i] -> GetXCurr().dGet(3);
+        if (z_i < seabed_z_param) {
+            const doublereal pen = seabed_z_param - z_i; // 海底侵入量（z 座標的な意味）
+            const doublereal vz = N_nodes_param[i] -> GetVCurr().dGet(3); // 海底座標のクラス定義で下向き負，上向き正を決めている
+            const doublereal Fz = Kseabed_param * pen - Cseabed_param * vz; // ばね + 減衰
+
+            Vec3 Fseabed(0.0, 0.0, Fz);
+            R.Add(idx+1, Fseabed); // +Z 方向の反力
+        }
     }
     
     // ====== 軸方向の EA + CA：セグメント単位 ======
@@ -702,14 +728,17 @@ SubVectorHandler& ModuleCatenaryLM::AssRes(
         const doublereal vrel = dv(1)*t(1) + dv(2)*t(2) + dv(3)*t(3);
         const doublereal Fd = vrel * CA;
 
-        const Vec3 F = t * (Fel + Fd); // セグメント軸力
+        doublereal Faxial = Fel + Fd; // 弾性 + 減衰合力
+        if (Faxial < 0.0) Faxial = 0.0; // 圧縮不可
+        const Vec3 F = t * Faxial; // 軸力ベクトル
 
-        // 残差へ反映
-        const unsigned int idx_i = i*6;
-        const unsigned int idx_j = j*6;
+        if (Faxial > 0.0) { // Faxial == 0 のときは何もしない
+            const unsigned int idx_i = i*6;
+            const unsigned int idx_j = j*6;
 
-        R.Add(idx_i+1, -F); // 左ノード
-        R.Add(idx_j+1, F); // 右ノード
+            R.Add(idx_i+1, -F); // 左ノード
+            R.Add(idx_j+1, F); // 右ノード
+        }
     }
 
     return R;
