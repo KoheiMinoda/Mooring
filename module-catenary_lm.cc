@@ -649,116 +649,70 @@ void ModuleCatenaryLM::InitialWorkSpaceDim(integer* piNumRows, integer* piNumCol
 
 // ================ 残差 ==========================
 SubVectorHandler& ModuleCatenaryLM::AssRes(
-    SubVectorHandler& WorkVec,
+    SubVectorHandler& R,
     doublereal dCoef,
     const VectorHandler& XCurr,
     const VectorHandler& XPrimeCurr
 ) {
 
-    integer iNumRows = 0;
-    integer iNumCols = 0;
-    WorkSpaceDim(&iNumRows, &iNumCols);
+    const unsigned int ndof_tot = Seg_param * 6;
+    R.ResizeReset(ndof_tot);
 
-    WorkVec.ResizeReset(iNumRows);
+    for (unsigned int i = 0; i < Seg_param; ++i) {
+        
+        const unsigned int idx = i*6;
 
-    for (unsigned int i = 0; i < N_nodes_param.size(); ++i) {
-        StructDispNode* node_i = N_nodes_param[i];
-        if (node_i == 0) {
-            continue;
-        }
+        // ====== 重力 + 慣性：ノード単位 ======
+        const Vec3 Fg(0.0, 0.0, -node_mass_param[i]*g_gravity_param);
+        R.Add(idx+1, Fg);
 
-        const Vec3& pos_i = node_i->GetXCurr();
-        const Vec3& vel_i = node_i->GetVCurr();
+        // 慣性 -M * a_lumped (a = dCoef*XPrime)
+        const Vec3 a_like(XPrimeCurr(idx + 1), XPrimeCurr(idx + 2), XPrimeCurr(idx + 3));
+        const Vec3 Fi = - a_like * dCoef * node_mass_param[i];
 
-        unsigned int F_idx_start = i * 6;
-        Vec3 total_force_on_node_i(0.0, 0.0, 0.0);
+        R.Add(idx+1, Fi);
+    }
+    
+    // ====== 軸方向の EA + CA：セグメント単位 ======
 
-        // ====== 重力 ======
-        doublereal node_mass_contribution = node_mass_param[i];
-        Vec3 gravity_force(0.0, 0.0, -node_mass_contribution * g_gravity_param);
-        total_force_on_node_i += gravity_force;
+    for (unsigned int s = 0; s < Seg_param - 1; ++s) {
+        const unsigned int i = s; // 左のノードのインデックス
+        const unsigned int j = s + 1; // 右のノードのインデックス
 
-        Vec3 acc_like(
-            XPrimeCurr(F_idx_start + 1),
-            XPrimeCurr(F_idx_start + 2),
-            XPrimeCurr(F_idx_start + 3)
-        );
+        // 現在の位置と速度
+        const Vec3 xi = N_nodes_param[i]->GetXCurr();
+        const Vec3 xj = N_nodes_param[j]->GetXCurr();
+        const Vec3 vi = N_nodes_param[i]->GetVCurr();
+        const Vec3 vj = N_nodes_param[j]->GetVCurr();
 
-        Vec3 inertial_force = - acc_like * dCoef * node_mass_param[i];
-        total_force_on_node_i += inertial_force;
-        // ====== 弾性力 ======
+        const Vec3 dx = xj - xi;
+        const doublereal l = dx.Norm();
+        if (l < 1.e-12) continue;
 
+        const Vec3 t = dx / l;
 
-        // ====== 減衰力 ======
-        // 左側のセグメント (ノード i-1 と ノード i を接続) からの寄与
-        if (i > 0) {
-            StructDispNode* node_prev = N_nodes_param[i-1];
-            if (node_prev && (i-1) < P_param.size() && P_param[i-1].CA_seg > 0.0) {
-                const SegmentProperty& seg_prop_prev = P_param[i-1];
-                const Vec3& pos_prev = node_prev->GetXCurr();
-                const Vec3& vel_prev = node_prev->GetVCurr();
+        // 物性
+        const doublereal L0 = P_param[s].L0_seg;
+        const doublereal EA = P_param[s].EA_seg;
+        const doublereal CA = P_param[s].CA_seg;
 
-                Vec3 vec_prev_i = pos_i - pos_prev;
-                doublereal length_prev_i = vec_prev_i.Norm();
-                Vec3 unit_vec_prev_i(0.0, 0.0, 0.0);
-                if (length_prev_i > 1.0e-12) {
-                    unit_vec_prev_i = vec_prev_i / length_prev_i;
-                }
+        // 弾性力と減衰力
+        const doublereal Fel = EA * (l - L0) / L0;
+        const Vec3 dv = vj - vi;
+        const doublereal vrel = dv(1)*t(1) + dv(2)*t(2) + dv(3)*t(3);
+        const doublereal Fd = vrel * CA;
 
-                Vec3 rel_vel_prev_i = vel_i - vel_prev;
-                doublereal axial_rel_vel = rel_vel_prev_i * unit_vec_prev_i;
-                doublereal damping_force_magnitude = seg_prop_prev.CA_seg * axial_rel_vel;
+        const Vec3 F = t * (Fel + Fd); // セグメント軸力
 
-                Vec3 damping_force_on_node_i_from_prev = unit_vec_prev_i * (-damping_force_magnitude);
-                total_force_on_node_i += damping_force_on_node_i_from_prev;
-            }
-        }
+        // 残差へ反映
+        const unsigned int idx_i = i*6;
+        const unsigned int idx_j = j*6;
 
-        // 右側のセグメント (ノード i と ノード i+1 またはアンカー を接続) からの寄与
-        if (i < P_param.size()) { // セグメントP_param[i]が存在する
-            const SegmentProperty& seg_prop_curr = P_param[i];
-            if (seg_prop_curr.CA_seg > 0.0) {
-                Vec3 pos_partner(0.0,0.0,0.0);
-                Vec3 vel_partner(0.0,0.0,0.0);
-                bool partner_is_anchor = false;
+        R.Add(idx_i+1, -F); // 左ノード
+        R.Add(idx_j+1, F); // 右ノード
+    }
 
-                if (i < N_nodes_param.size() - 1) {
-                    StructDispNode* node_next = N_nodes_param[i+1];
-                    if (node_next) {
-                        pos_partner = node_next->GetXCurr();
-                        vel_partner = node_next->GetVCurr();
-                    } else {
-                        continue;
-                    }
-                } else {
-                    pos_partner = Vec3(APx_orig, APy_orig, APz_orig);
-                    vel_partner = Vec3(0.0, 0.0, 0.0);
-                    partner_is_anchor = true;
-                }
-
-                Vec3 vec_i_partner = pos_partner - pos_i;
-                doublereal length_i_partner = vec_i_partner.Norm();
-                Vec3 unit_vec_i_partner(0.0, 0.0, 0.0);
-                if (length_i_partner > 1.0e-12) {
-                    unit_vec_i_partner = vec_i_partner / length_i_partner;
-                }
-
-                Vec3 rel_vel_i_partner = vel_partner - vel_i;
-                doublereal axial_rel_vel = rel_vel_i_partner * unit_vec_i_partner;
-                doublereal damping_force_magnitude = seg_prop_curr.CA_seg * axial_rel_vel;
-
-                Vec3 damping_force_on_node_i_from_curr_seg =  unit_vec_i_partner * (-damping_force_magnitude);
-                total_force_on_node_i += damping_force_on_node_i_from_curr_seg;
-            }
-        }
-
-        // ====== WorkVec への格納 ======
-        WorkVec.PutCoef(F_idx_start + 1, total_force_on_node_i.dGet(1));
-        WorkVec.PutCoef(F_idx_start + 2, total_force_on_node_i.dGet(2));
-        WorkVec.PutCoef(F_idx_start + 3, total_force_on_node_i.dGet(3));
-    } 
-
-    return WorkVec;
+    return R;
 }
 
 SubVectorHandler& ModuleCatenaryLM::InitialAssRes(
