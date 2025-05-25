@@ -112,6 +112,8 @@ private:
     // このベクトルサイズは Seg_param になる（0 ~ Seg_param - 1）
     std::vector<StructDispNode*> N_nodes_param;
 
+    std::vector<doublereal> node_mass_param; // 各ランプドマス点の質量 [kg]
+
     // 各セグメントの特性
     struct SegmentProperty {
         doublereal L0_seg;  // 「セグメント」の初期自然長
@@ -278,6 +280,16 @@ ModuleCatenaryLM::ModuleCatenaryLM(
             P_param[i].M_seg = mass_per_segment;
             P_param[i].EA_seg = EA_val;
             P_param[i].CA_seg = CA_val;
+        }
+
+        // 各ノードに対応する質量
+        node_mass_param.assign(Seg_param, 0.0);
+        for (unsigned int s = 0; s < Seg_param; ++s) {
+            const doublereal m_half = P_param[s].M_seg*0.5;
+            node_mass_param[s] += m_half; // 右端側
+            if (s+1 < Seg_param) {
+                node_mass_param[s+1] += m_half; // 左隣側
+            }
         }
 
         // ログ出力：
@@ -662,19 +674,18 @@ SubVectorHandler& ModuleCatenaryLM::AssRes(
         Vec3 total_force_on_node_i(0.0, 0.0, 0.0);
 
         // ====== 重力 ======
-        doublereal node_mass_contribution = 0.0;
-        if (i > 0) {
-            if ((i-1) < P_param.size()) {
-                node_mass_contribution += P_param[i-1].M_seg / 2.0;
-            }
-        }
-        if (i < P_param.size()) {
-            node_mass_contribution += P_param[i].M_seg / 2.0;
-        }
-
+        doublereal node_mass_contribution = node_mass_param[i];
         Vec3 gravity_force(0.0, 0.0, -node_mass_contribution * g_gravity_param);
         total_force_on_node_i += gravity_force;
 
+        Vec3 acc_like(
+            XPrimeCurr(F_idx_start + 1),
+            XPrimeCurr(F_idx_start + 2),
+            XPrimeCurr(F_idx_start + 3)
+        );
+
+        Vec3 inertial_force = - acc_like * dCoef * node_mass_param[i];
+        total_force_on_node_i += inertial_force;
         // ====== 弾性力 ======
 
 
