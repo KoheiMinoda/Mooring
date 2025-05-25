@@ -621,13 +621,18 @@ void ModuleCatenaryLM::Output(OutputHandler& OH) const {
 // origin ではフェアリーダーポイントのみで 6 自由度で扱っていたが，ランプドマス法で内部ノードも全て管理する場合は大きく変わる
 void ModuleCatenaryLM::WorkSpaceDim(integer* piNumRows, integer* piNumCols) const {
     unsigned int num_nodes = Seg_param;
-    unsigned int dof_per_node = 3;
+    unsigned int dof_per_node = 6;
 
     *piNumRows = num_nodes * dof_per_node;
     *piNumCols = num_nodes * dof_per_node;
 }
 
 void ModuleCatenaryLM::InitialWorkSpaceDim(integer* piNumRows, integer* piNumCols) const {
+    unsigned int num_nodes = Seg_param;
+    unsigned int dof_per_node = 6;
+
+    *piNumRows = num_nodes * dof_per_node;
+    *piNumCols = num_nodes * dof_per_node;
 }
 
 // ================ 残差 ==========================
@@ -653,7 +658,7 @@ SubVectorHandler& ModuleCatenaryLM::AssRes(
         const Vec3& pos_i = node_i->GetXCurr();
         const Vec3& vel_i = node_i->GetVCurr();
 
-        unsigned int F_idx_start = i * 3;
+        unsigned int F_idx_start = i * 6;
         Vec3 total_force_on_node_i(0.0, 0.0, 0.0);
 
         // ====== 重力 ======
@@ -784,7 +789,7 @@ std::ostream& ModuleCatenaryLM::Restart(std::ostream& out) const {
 
 // 初期化フェーズで特別な解析をするなら，初期のみ自由度を付与する
 unsigned int ModuleCatenaryLM::iGetInitialNumDof(void) const {
-    return 0;
+    return Seg_param * 6;
 }
 
 
