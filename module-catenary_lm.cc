@@ -219,9 +219,9 @@ ModuleCatenaryLM::ModuleCatenaryLM(
 
         // FSF の読み込み（元のコードを維持）
         if (HP.IsKeyWord("Force" "scale" "factor")) {
-			FSF.Set(HP.GetDriveCaller());
+			FSF_orig.Set(HP.GetDriveCaller());
 		} else {
-			FSF.Set(new OneDriveCaller);
+			FSF_orig.Set(new OneDriveCaller);
 		}
 
         // 出力フラグの設定（元のコードを維持）
@@ -506,32 +506,14 @@ void ModuleCatenaryLM::Output(OutputHandler& OH) const {
 // ================ ヤコビアン行列と残差ベクトルの次元を設定 ====================
 // origin ではフェアリーダーポイントのみで 6 自由度で扱っていたが，ランプドマス法で内部ノードも全て管理する場合は大きく変わる
 void ModuleCatenaryLM::WorkSpaceDim(integer* piNumRows, integer* piNumCols) const {
-    *piNumRows = 0;
-    *piNumCols = 0;
+    unsigned int num_nodes = Seg_param;
+    unsigned int dof_per_node = 3;
+
+    *piNumRows = num_nodes * dof_per_node;
+    *piNumCols = num_nodes * dof_per_node;
 }
 
 void ModuleCatenaryLM::InitialWorkSpaceDim(integer* piNumRows, integer* piNumCols) const {
-    *piNumRows = 0;
-    *piNumCols = 0;
-}
-
-// ============== 全体ヤコビアン ====================
-VariableSubMatrixHandler& ModuleCatenaryLM::AssJac(
-    VariableSubMatrixHandler& WorkMat,
-    doublereal /*dCoef*/,
-    const VectorHandler& /*X*/, 
-    const VectorHandler& /*XP*/
-) {
-    WorkMat.SetNullMatrix();
-    return WorkMat;
-}
-
-VariableSubMatrixHandler& ModuleCatenaryLM::InitialAssJac(
-    VariableSubMatrixHandler& WorkMat,
-    const VectorHandler& /*X*/
-) {
-    WorkMat.SetNullMatrix();
-    return WorkMat;
 }
 
 // ================ 残差 ==========================
@@ -541,14 +523,138 @@ SubVectorHandler& ModuleCatenaryLM::AssRes(
     const VectorHandler& XCurr,
     const VectorHandler& XPrimeCurr
 ) {
+
+    integer iNumRows = 0;
+    integer iNumCols = 0;
+    WorkSpaceDim(&iNumRows, &iNumCols);
+
+    WorkVec.ResizeReset(iNumRows);
+
+    for (unsigned int i = 0; i < N_nodes_param.size(); ++i) {
+        StructDispNode* node_i = N_nodes_param[i];
+        if (node_i == 0) {
+            continue;
+        }
+
+        const Vec3& pos_i = node_i->GetXCurr();
+        const Vec3& vel_i = node_i->GetVCurr();
+
+        unsigned int F_idx_start = i * 3;
+        Vec3 total_force_on_node_i(0.0, 0.0, 0.0);
+
+        // ====== 重力 ======
+        doublereal node_mass_contribution = 0.0;
+        if (i > 0) {
+            if ((i-1) < P_param.size()) {
+                node_mass_contribution += P_param[i-1].M_seg / 2.0;
+            }
+        }
+        if (i < P_param.size()) {
+            node_mass_contribution += P_param[i].M_seg / 2.0;
+        }
+
+        Vec3 gravity_force(0.0, 0.0, -node_mass_contribution * g_gravity_param);
+        total_force_on_node_i += gravity_force;
+
+        // ====== 弾性力 ======
+
+
+        // ====== 減衰力 ======
+        // 左側のセグメント (ノード i-1 と ノード i を接続) からの寄与
+        if (i > 0) {
+            StructDispNode* node_prev = N_nodes_param[i-1];
+            if (node_prev && (i-1) < P_param.size() && P_param[i-1].CA_seg > 0.0) {
+                const SegmentProperty& seg_prop_prev = P_param[i-1];
+                const Vec3& pos_prev = node_prev->GetXCurr();
+                const Vec3& vel_prev = node_prev->GetVCurr();
+
+                Vec3 vec_prev_i = pos_i - pos_prev;
+                doublereal length_prev_i = vec_prev_i.Norm();
+                Vec3 unit_vec_prev_i(0.0, 0.0, 0.0);
+                if (length_prev_i > 1.0e-12) {
+                    unit_vec_prev_i = vec_prev_i / length_prev_i;
+                }
+
+                Vec3 rel_vel_prev_i = vel_i - vel_prev;
+                doublereal axial_rel_vel = rel_vel_prev_i * unit_vec_prev_i;
+                doublereal damping_force_magnitude = seg_prop_prev.CA_seg * axial_rel_vel;
+
+                Vec3 damping_force_on_node_i_from_prev = unit_vec_prev_i * (-damping_force_magnitude);
+                total_force_on_node_i += damping_force_on_node_i_from_prev;
+            }
+        }
+
+        // 右側のセグメント (ノード i と ノード i+1 またはアンカー を接続) からの寄与
+        if (i < P_param.size()) { // セグメントP_param[i]が存在する
+            const SegmentProperty& seg_prop_curr = P_param[i];
+            if (seg_prop_curr.CA_seg > 0.0) {
+                Vec3 pos_partner(0.0,0.0,0.0);
+                Vec3 vel_partner(0.0,0.0,0.0);
+                bool partner_is_anchor = false;
+
+                if (i < N_nodes_param.size() - 1) {
+                    StructDispNode* node_next = N_nodes_param[i+1];
+                    if (node_next) {
+                        pos_partner = node_next->GetXCurr();
+                        vel_partner = node_next->GetVCurr();
+                    } else {
+                        continue;
+                    }
+                } else {
+                    pos_partner = Vec3(APx_orig, APy_orig, APz_orig);
+                    vel_partner = Vec3(0.0, 0.0, 0.0);
+                    partner_is_anchor = true;
+                }
+
+                Vec3 vec_i_partner = pos_partner - pos_i;
+                doublereal length_i_partner = vec_i_partner.Norm();
+                Vec3 unit_vec_i_partner(0.0, 0.0, 0.0);
+                if (length_i_partner > 1.0e-12) {
+                    unit_vec_i_partner = vec_i_partner / length_i_partner;
+                }
+
+                Vec3 rel_vel_i_partner = vel_partner - vel_i;
+                doublereal axial_rel_vel = rel_vel_i_partner * unit_vec_i_partner;
+                doublereal damping_force_magnitude = seg_prop_curr.CA_seg * axial_rel_vel;
+
+                Vec3 damping_force_on_node_i_from_curr_seg =  unit_vec_i_partner * (-damping_force_magnitude);
+                total_force_on_node_i += damping_force_on_node_i_from_curr_seg;
+            }
+        }
+
+        // ====== WorkVec への格納 ======
+        WorkVec.PutCoef(F_idx_start + 1, total_force_on_node_i.dGet(1));
+        WorkVec.PutCoef(F_idx_start + 2, total_force_on_node_i.dGet(2));
+        WorkVec.PutCoef(F_idx_start + 3, total_force_on_node_i.dGet(3));
+    } 
+
     return WorkVec;
 }
 
+// 初期形状をカテナリー理論で決める
 SubVectorHandler& ModuleCatenaryLM::InitialAssRes(
     SubVectorHandler& WorkVec,
     const VectorHandler& XCurr
 ) {
     return WorkVec;
+}
+
+// ============== 全体ヤコビアン ====================
+VariableSubMatrixHandler& ModuleCatenaryLM::AssJac(
+    VariableSubMatrixHandler& WorkMat,
+    doublereal dCoef,
+    const VectorHandler& XCurr, 
+    const VectorHandler& XPrimeCurr
+) {
+    return WorkMat;
+}
+
+VariableSubMatrixHandler& ModuleCatenaryLM::InitialAssJac(
+    VariableSubMatrixHandler& WorkMat,
+    const VectorHandler& /*X*/
+) {
+    WorkMat.SetNullMatrix();
+    return WorkMat;
 }
 
 // この要素がMBDynのモデル内で接続している，あるいは管理しているノードの数を返す
