@@ -476,10 +476,124 @@ double ModuleCatenaryLM::rtsafe_catenary_local(double x1_bounds, double x2_bound
 
 // 要素に関連する自由度の初期値を設定するために MBDyn から呼び出す
 // N_nodes_params に格納されているノードの初期位置や初期速度を計算
-void ModuleCatenaryLM::SetInitialValue(VectorHandler& /* X */, VectorHandler& /* XP */) {
-    // フェアリーダー点座標とアンカー点座標からラインの初期形状を計算し，各内部ノードの初期座標を決定する，かも？
-}
+// フェアリーダー点座標とアンカー点座標からラインの初期形状を計算し，各内部ノードの初期座標を決定する
+void ModuleCatenaryLM::SetInitialValue(VectorHandler& X, VectorHandler& XP) {
+    
+    const Vec3& fairlead_pos = N_nodes_param[0] -> GetXCurr(); // フェアリーダーノードの初期位置を取得
+    Vec3 anchor_pos(APx_orig, APy_orig, APz_orig); // アンカーの位置を取得
 
+    Vec3 FP_AP = fairlead_pos - anchor_pos; // アンカーを原点とした座標系でのフェアリーダーの位置ベクトル
+
+    doublereal h = std::fabs(FP_AP.dGet(3)); // FP, AP の鉛直距離の計算
+    doublereal L_APFP = std::sqrt(std::pow(FP_AP.dGet(1), 2.0) + std::pow(FP_AP.dGet(2), 2.0)); // FP, AP の水平距離の計算
+
+    // 水平面で見て，AP から FP に向かう単位ベクトル
+    Vec3 horizontal_dir(0.0, 0.0, 0.0);
+    if (L_APFP > 1e-12) {
+        horizontal_dir = Vec3(FP_AP.dGet(1) / L_APFP, FP_AP.dGet(2) / L_APFP, 0.0);
+    }
+
+    // カテナリー理論に用いるパラメータ
+    doublereal L0_APFP = L_orig - h; // 水平張力が 0 になるときの水平距離
+    doublereal delta = L_APFP - L0_APFP;
+    doublereal d = 0.0;
+    doublereal l = 0.0;
+
+    if (h > 1e-12) {
+        d = delta / h;
+        l = L_orig / h;
+    }
+
+    // 水平張力パラメータ x = H /(w*h) について
+    doublereal x_param = 0.0;
+    doublereal p0 = 0.0;
+    doublereal H = 0.0; // 水平張力
+    doublereal V = 0.0; // 鉛直張力
+
+    if (d <= 0.0) {
+        // たるんでいる場合
+        H = 0.0;
+        V = w_orig * h;
+    } else if (h > 1e-12 && d < (std::sqrt(l*l - 1.0) - (l - 1.0))) {
+        // カテナリー形状
+        doublereal x1 = 0.0;
+        doublereal x2 = 1.0e6;
+        x_param = rtsafe_catenary_local(x1, x2, xacc_orig, d, l, p0);
+        H = x_param * w_orig * h;
+        V = w_orig * h * std::sqrt(1.0 + 2.0*x_param);
+    }
+
+    // ここから各内部ノードについて計算する
+    std::vector<Vec3> node_positions(Seg_param); // 各内部ノードの初期位置
+    node_positions[0] = fairlead_pos; // FP
+
+    if (H > 1e-12) {
+        // カテナリー形状に沿って配置
+        doublereal a = H / w_orig; // カテナリーパラメータ
+
+        // AP からの弧長を計算
+        std::vector<doublereal> arc_length(Seg_param + 1);
+        arc_length[0] = 0.0; // AP
+        
+        for (unsigned int i = 1; i <= Seg_param; ++i) {
+            arc_length[i] = L_orig * static_cast<doublereal>(i) / static_cast<doublereal>(Seg_param);
+        }
+
+        // 弧長に対応する位置の計算
+        for (unsigned int i = 1; i < Seg_param; ++i) {
+            doublereal s = L_orig - arc_length[i]; // FP からの弧長
+
+            // カテナリー曲線に沿った位置の計算
+            doublereal x_local = 0.0;
+            doublereal z_local = 0.0;
+
+            if (p0 < 1e-12) {
+                // 海底接触無しの場合
+                doublereal beta = s / a;
+                if (beta < 50.0) {
+                    x_local = a*myasinh_local(std::sinh(L_APFP / a) - std::sinh(beta));
+                    z_local = a*(std::cosh((L_APFP - x_local) / a) - std::cosh(L_APFP / a));
+                } else {
+                    x_local = L_APFP - s;
+                    z_local = 0.0;
+                }
+            } else {
+                // 海底接触ありの場合（簡略化）
+                doublereal ratio = static_cast<doublereal>(i) / static_cast<doublereal>(Seg_param);
+                x_local = L_APFP * (1.0 - ratio);
+                z_local = h * (1.0 - ratio);
+            }
+
+            // グローバル座標系における各ノードの位置
+            node_positions[i] = anchor_pos + horizontal_dir*x_local + Vec3(0.0, 0.0, z_local);
+        }
+    } else {
+        // 垂直に垂れ下がる場合
+        for (unsigned int i = 1; i < Seg_param; ++i) {
+            double ratio = static_cast<doublereal>(i) / static_cast<doublereal>(Seg_param);
+            doublereal z_offset = -h * ratio;
+            node_positions[i] = fairlead_pos + Vec3(0.0, 0.0, z_offset);
+        }
+    }
+
+    // 各ノードの初期位置と速度を設定
+    for (unsigned int i = 1; i < Seg_param; ++i) {
+        if (N_nodes_param[i] != 0) {
+
+            // 位置の設定
+            integer iFirstPosIndex = N_nodes_param[i] -> iGetFirstPositionIndex();
+            X.PutCoef(iFirstPosIndex + 1, node_positions[i].dGet(1));  // X 座標
+            X.PutCoef(iFirstPosIndex + 2, node_positions[i].dGet(2));  // Y 座標
+            X.PutCoef(iFirstPosIndex + 3, node_positions[i].dGet(3));  // Z 座標
+
+            // 速度は 0 で初期化
+            integer iFirstVelIndex = N_nodes_param[i]->iGetFirstMomentumIndex();
+            XP.PutCoef(iFirstVelIndex + 1, 0.0);  // Vx = 0
+            XP.PutCoef(iFirstVelIndex + 2, 0.0);  // Vy = 0
+            XP.PutCoef(iFirstVelIndex + 3, 0.0);  // Vz = 0
+        }
+    }
+}
 
 // Outputメソッド: シミュレーション結果の出力
 void ModuleCatenaryLM::Output(OutputHandler& OH) const {
@@ -631,7 +745,6 @@ SubVectorHandler& ModuleCatenaryLM::AssRes(
     return WorkVec;
 }
 
-// 初期形状をカテナリー理論で決める
 SubVectorHandler& ModuleCatenaryLM::InitialAssRes(
     SubVectorHandler& WorkVec,
     const VectorHandler& XCurr
