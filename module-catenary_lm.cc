@@ -633,24 +633,54 @@ void ModuleCatenaryLM::SetInitialValue(VectorHandler& X, VectorHandler& XP) {
 
 // Outputメソッド: シミュレーション結果の出力
 void ModuleCatenaryLM::Output(OutputHandler& OH) const {
-    // この要素が出力対象かどうかの判定
-    if (bToBeOutput()) {
-        // テキスト形式で出力するかどうかの判定
-        if (OH.UseText(OutputHandler::LOADABLE)) {
-            // フェアリーダーノードが存在し，有効かどうかの確認
-            if (!N_nodes_param.empty() && N_nodes_param[0] != 0) {
-                OH.Loadable() << GetLabel() // 要素のラベル
-                              << " FairleadPos "
-                              << N_nodes_param[0]->GetXCurr().dGet(1) << " " // フェアリーダーの X 座標
-                              << N_nodes_param[0]->GetXCurr().dGet(2) << " " // フェアリーダーの Y 座標
-                              << N_nodes_param[0]->GetXCurr().dGet(3) // // フェアリーダーの Z 座標
-                              << std::endl; 
-            } else {
-                OH.Loadable() << GetLabel() << " Error: Fairlead node not available for output." << std::endl;
-            }
-            // ========== 各セグメントの張力や内部ノードの位置なども出力するならここに ============
+    if (!bToBeOutput()) return;
+    if (!OH.UseText(OutputHandler::LOADABLE)) return;
+
+    const integer lbl = GetLabel();
+
+    // フェアリーダ座標
+    if (N_nodes_param.empty() || N_nodes_param[0] == 0) {
+        OH.Loadable() << lbl << "[Error] Fairlead node not available for output.\n";
+        return;
+    }
+    const Vec3 posFL = N_nodes_param[0] -> GetXCurr();
+
+    // フェアリーダに作用する軸方向力
+    Vec3 Ffl(0.0, 0.0, 0.0);
+    if (N_nodes_param.size() >= 2 && N_nodes_param[1] != 0) {
+        Vec3 x0 = posFL;
+        Vec3 x1 = N_nodes_param[1] -> GetXCurr();
+        Vec3 v0 = N_nodes_param[0] -> GetVCurr();
+        Vec3 v1 = N_nodes_param[1] -> GetVCurr();
+
+        Vec3 dx = x1 - x0;
+        doublereal l = dx.Norm();
+        if (l > 1.e-12) {
+            Vec3 t = dx / l;
+
+            doublereal L0 = P_param[0].L0_seg;
+            doublereal EA = P_param[0].EA_seg;
+            doublereal CA = P_param[0].CA_seg;
+
+            doublereal Fel = EA * (l - L0) / L0;
+            Vec3 dv = v1 - v0;
+            doublereal vrel = dv(1)*t(1) + dv(2)*t(2) + dv(3)*t(3);
+            doublereal Fd = vrel + CA;
+            doublereal Fax = Fel + Fd;
+            if (Fax < 0.0) Fax = 0.0;
+
+            Vec3 F = t * Fax;
+            const doublereal fsf = FSF_orig.dGet();
+            Ffl = F * fsf;
         }
     }
+    OH.Loadable() << lbl << " FairleadPos "
+                  << posFL.dGet(1) << " "
+                  << posFL.dGet(2) << " "
+                  << posFL.dGet(3) << " FairleadForce "
+                  << Ffl.dGet(1)  << " "
+                  << Ffl.dGet(2)  << " "
+                  << Ffl.dGet(3)  << '\n';
 }
 
 // ================ ヤコビアン行列と残差ベクトルの次元を設定 ====================
