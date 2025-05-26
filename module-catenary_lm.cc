@@ -12,15 +12,13 @@
 #include "userelem.h"
 #include "module-catenary_lm.h" // 自前のヘッダ
 
-// 追加のヘッダー
 // dataman.h や userelem.h から間接的にインクルードされるならいらない可能性
 #include "elem.h"          // Elem 基底クラス (userelem.hがインクルードしている可能性が高い)
 #include "strnode.h"       // StructNode (ランプドマス点の表現に必須)
-#include "drive.h"         // DriveOwner (FSFのため)
+#include "drive.h"         // DriveOwner (FSF のため)
 #include "node.h"          // Node (pGetNode の戻り値の基底クラス)
 #include "gravity.h"
 
-// 追加の標準ライブラリ
 #include <vector>       // std::vector (ノードやセグメントのリスト管理用)
 
 // クラス宣言
@@ -29,8 +27,7 @@ class ModuleCatenaryLM : virtual public Elem, public UserDefinedElem
 public:
     // コンストラクタ [uLabel : 要素のラベル, *pD0 : DOF(Degree of Freedom) 所有者へのポインタ, *pDM : データマネージャーへのポインタ, HP : MBDyn パーサへの"参照"] 
     ModuleCatenaryLM(unsigned uLabel, const DofOwner *pD0, DataManager* pDM, MBDynParser& HP);
-    // デストラクタ [オブジェクトが破棄されるたび呼びだされる]
-    // メモリリークを防ぐために重要
+    // デストラクタ [オブジェクトが破棄されるたび呼びだされる] // メモリリークを防ぐために重要
     virtual ~ModuleCatenaryLM(void);
 
     // ========= 仮想関数群 ここから ==============
@@ -156,7 +153,7 @@ ModuleCatenaryLM::ModuleCatenaryLM(
             silent_cout(
                 "\n"
                 "Module:     ModuleCatenaryLM (Lumped Mass Catenary Mooring Line - Segments Fixed to 20)\n"
-                "Usage:      catenary_lm, label,\n"
+                "Usage:      catenary_lm, \n"
                 "                fairlead_node_label,\n"
                 "                total_length, unit_weight, rtsafe_accuracy,\n"
                 "                APx, APy, APz, (Anchor fixed coordinates)\n"
@@ -253,7 +250,7 @@ ModuleCatenaryLM::ModuleCatenaryLM(
         N_nodes_param.clear();
         N_nodes_param.resize(Seg_param);
 
-        // ====== ここも既存の .usr ファイルに書き足す (201~220 などユニークな数字を 20 コ) ======
+        // ====== ここも既存の .usr ファイルに書き足す ======
         unsigned int fairlead_node_label = HP.GetInt();
 
         // 各ノードのラベルの受け取り
@@ -270,6 +267,29 @@ ModuleCatenaryLM::ModuleCatenaryLM(
             N_nodes_param[0] = dispNode;
         }
 
+        /*
+        // .ref で定義せずに，各内部ノードのデータは追わない場合
+        const integer BASE_LBL = 90000;
+        for (unsigned int i = 1; i < Seg_param; ++i) {
+
+            integer lbl = BASE_LBL + i;
+
+            StructDispNode* pNew = new StructDispNode(
+                nextLbl + 1,
+                *pD0,
+                Vec3(0., 0., 0.),
+                Mat3x3DEye,
+                Vec3(0., 0., 0.),
+                Vec3(0., 0., 0.)
+            );
+
+            pDM -> AddNode(pNew);
+            N_nodes_param[i] = pNew;
+        }
+        */
+
+        // ====== 各ノードの時系列データを追うならこれで良いはず？ ============
+        // 一旦は FP だけにして後回し
         // 内部質量点ノードの処理（1 … Seg_param-1）もすべて入力ファイルでラベルを受け取り
         for (unsigned int i = 1; i < Seg_param; ++i) {
             unsigned int node_label = HP.GetInt();
