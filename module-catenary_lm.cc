@@ -697,6 +697,8 @@ SubVectorHandler& ModuleCatenaryLM::AssRes(
             Vec3 Fseabed(0.0, 0.0, Fz);
             R.Add(idx+1, Fseabed); // +Z 方向の反力
         }
+
+        // 回転 DOF (4 ,5, 6) はここでは 0 : ノード単位の計算の時は考慮しない
     }
     
     // ====== 軸方向の EA + CA：セグメント単位 ======
@@ -753,12 +755,101 @@ SubVectorHandler& ModuleCatenaryLM::InitialAssRes(
 
 // ============== 全体ヤコビアン ====================
 VariableSubMatrixHandler& ModuleCatenaryLM::AssJac(
-    VariableSubMatrixHandler& WorkMat,
+    VariableSubMatrixHandler& WH,
     doublereal dCoef,
     const VectorHandler& XCurr, 
     const VectorHandler& XPrimeCurr
 ) {
-    return WorkMat;
+    const integer ndof_tot = Seg_param * 6; // ベクトルの大きさを決める int 変数を宣言して初期化
+    FullSubMatrixHandler& K = WH.SetFull();
+    K.ResizeReset(ndof_tot, ndof_tot); // 初期化（0 が入っている）
+
+    // ============================
+    // 海底ばね・ダンパ：各ノードの z 行に対角係数を追加
+    // ============================
+
+    for (unsigned int i = 0; i < Seg_param; ++i) {
+        const unsigned int idx = i*6;
+        const doublereal z_i = N_nodes_param[i] -> GetXCurr().dGet(3);
+
+        if (z_i < seabed_z_param) { // z 座標によって付加
+            const doublereal k_sea = Kseabed_param;
+            const doublereal c_sea = - Cseabed_param * dCoef;
+
+            K.PutCoef(idx+3, idx+3, k_sea + c_sea);
+        }
+    }
+
+    // =============================
+    // EA / CA + 幾何剛性
+    // =============================
+    for (unsigned int s = 0; s < Seg_param - 1; ++s) {
+
+        // 隣接ノード index
+        const unsigned int i = s;
+        const unsigned int j = s + 1;
+        const unsigned int row_i = i*6;
+        const unsigned int row_j = j*6;
+
+        // ======= 位置・速度・方向 ========
+        Vec3 xi = N_nodes_param[i] -> GetXCurr();
+        Vec3 xj = N_nodes_param[j] -> GetXCurr();
+        Vec3 vi = N_nodes_param[i] -> GetVCurr();
+        Vec3 vj = N_nodes_param[j] -> GetVCurr();
+
+        Vec3 dx = xj - xi;
+        doublereal l = dx.Norm();
+        if (l < 1.e-12) continue;
+        Vec3 t = dx / l; // 単位ベクトル
+
+        // ====== 物性と係数 =======
+        doublereal EA = P_param[s].EA_seg;
+        doublereal CA = P_param[s].CA_seg;
+        doublereal L0 = P_param[s].L0_seg;
+
+        const doublereal k_ax = EA / L0;
+        const doublereal c_ax = - CA * dCoef; // ここで符号を揃えた
+
+        // ====== 軸力 Fel ========
+        doublereal Fel = EA * (l - L0) / L0;
+        if (Fel <= 0.0) continue; // 張力 0 と圧縮は剛性無しと判断
+
+        // 基本ブロック Kt = (k_ax + c_ax)・(t × t)
+        doublereal Klocal[3][3];
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 3; ++c) {
+                
+                // t⊗t 項：軸方向剛性 + 減衰 
+                doublereal K_tt = (k_ax + c_ax) * t(r+1) * t(c+1);
+
+                // 幾何剛性 kg·(I − t⊗t)
+                doublereal delta = (r == c) ? 1.0 : 0.0;
+                doublereal Kg = (Fel / l) * (delta - t(r+1) * t(c+1));
+                
+                Klocal[r][c] = K_tt + Kg;
+            }
+        }
+
+        // 行列組み込み 6×6 ブロックの並進 3×3 部分のみ
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 3; ++c) {
+
+                const doublereal val = Klocal[r][c];
+
+                // 左節点 i
+                K.PutCoef(row_i + 1 + r, row_i + 1 + c, - val);
+                K.PutCoef(row_i + 1 + r, row_j + 1 + c, val);
+
+                // 右節点 j : 対称性で符号反転
+                K.PutCoef(row_j + 1 + r, row_i + 1 + c, val);
+                K.PutCoef(row_j + 1 + r, row_j + 1 + c, - val);
+            }
+        }
+    }
+
+    // TODO : 回転 DOF は 0 のまま
+
+    return WH;
 }
 
 VariableSubMatrixHandler& ModuleCatenaryLM::InitialAssJac(
