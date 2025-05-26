@@ -131,6 +131,9 @@ private:
     doublereal seabed_z_param; // 海底面 Z 座標（上向きが正）
     doublereal Kseabed_param; // 海底ばね [N/m]
     doublereal Cseabed_param; // 海底ダンパ [N s / m]
+
+    std::vector<bool> segSlack_prev; // 前回計算時のスラック状態
+    doublereal Krot_lock_param; // 回転 DOF を縛るペナルティ剛性
 };
 
 // コンストラクタ：パラメータの読み込みと初期設定
@@ -306,6 +309,12 @@ ModuleCatenaryLM::ModuleCatenaryLM(
                 node_mass_param[s+1] += m_half; // 左隣側
             }
         }
+
+        // 各ノードに対応する慣性の情報をもたせる？
+        // 具体的に慣性を足すのは AssRes 内部
+
+        Krot_lock_param = 1.e12;
+        segSlack_prev.assign(Seg_param - 1, false);
 
         // ログ出力：
         pDM->GetLogFile() << "ModuleCatenaryLM (" << GetLabel() << ") initialized:" << std::endl;
@@ -670,6 +679,8 @@ SubVectorHandler& ModuleCatenaryLM::AssRes(
     const VectorHandler& XPrimeCurr
 ) {
 
+    const doublereal fsf = FSF_orig.dGet();
+
     const unsigned int ndof_tot = Seg_param * 6;
     R.ResizeReset(ndof_tot);
 
@@ -679,12 +690,12 @@ SubVectorHandler& ModuleCatenaryLM::AssRes(
 
         // ====== 重力 + 慣性：ノード単位 ======
         const Vec3 Fg(0.0, 0.0, -node_mass_param[i]*g_gravity_param);
-        R.Add(idx+1, Fg);
+        Vec3 Fg_scaled = Fg*fsf;
+        R.Add(idx+1, Fg_scaled);
 
         // 慣性 -M * a_lumped (a = dCoef*XPrime)
         const Vec3 a_like(XPrimeCurr(idx + 1), XPrimeCurr(idx + 2), XPrimeCurr(idx + 3));
         const Vec3 Fi = - a_like * dCoef * node_mass_param[i];
-
         R.Add(idx+1, Fi);
 
         // 海底接触があるならノード単位で反力を追加（押し返す）
@@ -694,7 +705,7 @@ SubVectorHandler& ModuleCatenaryLM::AssRes(
             const doublereal vz = N_nodes_param[i] -> GetVCurr().dGet(3); // 海底座標のクラス定義で下向き負，上向き正を決めている
             const doublereal Fz = Kseabed_param * pen - Cseabed_param * vz; // ばね + 減衰
 
-            Vec3 Fseabed(0.0, 0.0, Fz);
+            Vec3 Fseabed(0.0, 0.0, Fz*fsf);
             R.Add(idx+1, Fseabed); // +Z 方向の反力
         }
 
@@ -732,7 +743,16 @@ SubVectorHandler& ModuleCatenaryLM::AssRes(
 
         doublereal Faxial = Fel + Fd; // 弾性 + 減衰合力
         if (Faxial < 0.0) Faxial = 0.0; // 圧縮不可
-        const Vec3 F = t * Faxial; // 軸力ベクトル
+        /* 
+        // API の確認が取れたら実装する？　符号変化時の再線形化
+        bool slack_now = (Fax <= 0.0);
+        if (slack_now != segSlack_prev[s]) { // 状況が変わった場合
+            pHints->bSetNotLinear(); // 再線形化を要求
+            segSlack_prev[s] = slack_now;
+        }
+        if (slack_now) continue;
+        */
+        const Vec3 F = t * (Faxial * fsf); // 軸力ベクトル
 
         if (Faxial > 0.0) { // Faxial == 0 のときは何もしない
             const unsigned int idx_i = i*6;
@@ -765,7 +785,7 @@ VariableSubMatrixHandler& ModuleCatenaryLM::AssJac(
     K.ResizeReset(ndof_tot, ndof_tot); // 初期化（0 が入っている）
 
     // ============================
-    // 海底ばね・ダンパ：各ノードの z 行に対角係数を追加
+    // 海底ばね・ダンパ：各ノードの z 行に対角係数を追加：ノードループ
     // ============================
 
     for (unsigned int i = 0; i < Seg_param; ++i) {
@@ -780,8 +800,16 @@ VariableSubMatrixHandler& ModuleCatenaryLM::AssJac(
         }
     }
 
+    // 回転 DOF を数値的に固定：大きな対角剛性をもたせる
+    for (unsigned int i = 0; i < Seg_param; ++i) {
+        const unsigned int idx = i * 6;
+        for (int r = 4; r <= 6; ++r) { 
+            K.PutCoef(idx + r, idx + r, Krot_lock_param);
+        }
+    }
+
     // =============================
-    // EA / CA + 幾何剛性
+    // EA / CA + 幾何剛性：セグメントループ
     // =============================
     for (unsigned int s = 0; s < Seg_param - 1; ++s) {
 
@@ -846,8 +874,6 @@ VariableSubMatrixHandler& ModuleCatenaryLM::AssJac(
             }
         }
     }
-
-    // TODO : 回転 DOF は 0 のまま
 
     return WH;
 }
