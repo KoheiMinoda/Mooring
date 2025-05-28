@@ -685,7 +685,7 @@ void ModuleCatenaryLM::Output(OutputHandler& OH) const {
             doublereal Fel = EA * (l - L0) / L0;
             Vec3 dv = v1 - v0;
             doublereal vrel = dv(1)*t(1) + dv(2)*t(2) + dv(3)*t(3);
-            doublereal Fd = vrel + CA;
+            doublereal Fd = vrel * CA;
             doublereal Fax = Fel + Fd;
             if (Fax < 0.0) Fax = 0.0;
 
