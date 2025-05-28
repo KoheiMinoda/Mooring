@@ -685,7 +685,7 @@ void ModuleCatenaryLM::Output(OutputHandler& OH) const {
             doublereal Fel = EA * (l - L0) / L0;
             Vec3 dv = v1 - v0;
             doublereal vrel = dv(1)*t(1) + dv(2)*t(2) + dv(3)*t(3);
-            doublereal Fd = vrel * CA;
+            doublereal Fd = vrel + CA;
             doublereal Fax = Fel + Fd;
             if (Fax < 0.0) Fax = 0.0;
 
@@ -908,19 +908,19 @@ VariableSubMatrixHandler& ModuleCatenaryLM::AssJac(
             }
         }
 
-        // 行列組み込み 6×6 ブロックの並進 3×3 部分のみ
+        // 全体ヤコビアン行列の対応する 3x3 並進ブロックに K_local_3x3 を組み込む
         for (int r = 0; r < 3; ++r) {
             for (int c = 0; c < 3; ++c) {
 
                 const doublereal val = Klocal[r][c];
 
                 // 左節点 i
-                K.PutCoef(row_i + 1 + r, row_i + 1 + c, - val);
-                K.PutCoef(row_i + 1 + r, row_j + 1 + c, val);
+                K.PutCoef(row_i + 1 + r, row_i + 1 + c, val);
+                K.PutCoef(row_i + 1 + r, row_j + 1 + c, - val);
 
                 // 右節点 j : 対称性で符号反転
-                K.PutCoef(row_j + 1 + r, row_i + 1 + c, val);
-                K.PutCoef(row_j + 1 + r, row_j + 1 + c, - val);
+                K.PutCoef(row_j + 1 + r, row_i + 1 + c, - val);
+                K.PutCoef(row_j + 1 + r, row_j + 1 + c, val);
             }
         }
     }
