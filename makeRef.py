@@ -243,8 +243,10 @@ if abs(a_catenary) < 1e-6 :
             s_node_from_top = i_node * s_seg_vert
             node_z_hang = z_start_hang - s_node_from_top 
             node_z_val = zf - s_node_from_top 
-            if node_z_val < za and L_TOTAL > h_span : 
-                pass 
+
+            if node_z_val < za:
+              node_z_val = za
+  
             nodes.append({"id": i_node, "x": x_hang, "y": y_hang, "z": node_z_val, "s_from_fp": s_node_from_top})
         internal_nodes_coords_final = nodes
 
@@ -283,6 +285,9 @@ else:
         node_x_coord = x_gm + a_catenary * xk_n
         node_y_coord = 0.0 
         node_z_coord = a_catenary * math.cosh(xk_n) + z_offset
+
+        if node_z_coord < za:
+            node_z_coord = za
         
         internal_nodes_coords_final.append({
             "id": i_node,
